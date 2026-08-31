@@ -1,0 +1,13 @@
+// RTorch GPU elementwise tanh. C[i] = tanh(A[i]) (length N).
+// binding 0=A, 1=P(uint N), 2=C(out)
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 2) writeonly buffer C { float c[]; };
+void main() {
+    uint N = p[0];
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= N) { return; }
+    c[i] = tanh(a[i]);
+}

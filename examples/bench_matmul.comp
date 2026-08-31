@@ -1,0 +1,25 @@
+#version 450
+layout(local_size_x=16, local_size_y=16) in;
+layout(set=0, binding=0) buffer A { float a[]; };
+layout(set=0, binding=1) buffer B { float b[]; };
+layout(set=0, binding=2) buffer O { float o[]; };
+shared float As[16][16];
+shared float Bs[16][16];
+void main() {
+    uint gx = gl_WorkGroupID.x;
+    uint gy = gl_WorkGroupID.y;
+    uint lx = gl_LocalInvocationID.x;
+    uint ly = gl_LocalInvocationID.y;
+    uint row = gy * 16u + ly;
+    uint col = gx * 16u + lx;
+    float acc = 0.0;
+    for (uint tile = 0u; tile < 64u; tile++) {
+        As[ly][lx] = a[row * 1024u + tile * 16u + lx];
+        Bs[ly][lx] = b[(tile * 16u + ly) * 1024u + col];
+        barrier();
+        for (uint kj = 0u; kj < 16u; kj++)
+            acc += As[ly][kj] * Bs[kj][lx];
+        barrier();
+    }
+    if (row < 1024u && col < 1024u) o[row * 1024u + col] = acc;
+}

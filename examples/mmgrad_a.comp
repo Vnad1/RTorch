@@ -1,0 +1,17 @@
+// RTorch GPU matmul-grad-A. dA[i,t] = Σ_j dC[i,j] * B[t,j]; A m×k, dC m×n, B k×n.
+// binding 0=dC(m×n), 1=B(k×n), 2=P(M,N,K), 3=dA(m×k)
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer DC { float dc[]; };
+layout(set = 0, binding = 1) readonly buffer B { float b[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer DA { float da[]; };
+void main() {
+    uint M = p[0]; uint N = p[1]; uint K = p[2];
+    uint i = gl_GlobalInvocationID.x;
+    uint t = gl_GlobalInvocationID.y;
+    if (i >= M || t >= K) { return; }
+    float s = 0.0;
+    for (uint j = 0u; j < N; ++j) { s += dc[i * N + j] * b[t * N + j]; }
+    da[i * K + t] = s;
+}

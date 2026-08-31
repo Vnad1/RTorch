@@ -1,0 +1,20 @@
+// RTorch GPU batch embedding-gather BACKWARD (scatter-add).
+//   E_grad[ ids[row]*dim + col ] += dc[row*dim + col]   (float atomic add)
+// binding 0=EGrad(V*dim, in/out), 1=ids(B u32), 2=P(B,dim u32), 3=dc(B*dim readonly)
+#version 450
+#extension GL_EXT_shader_atomic_float : require
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) buffer EG { float eg[]; };
+layout(set = 0, binding = 1) readonly buffer Ids { uint ids[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) readonly buffer DC { float dc[]; };
+void main() {
+    uint B = p[0];
+    uint dim = p[1];
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= B * dim) { return; }
+    uint row = i / dim;
+    uint col = i - row * dim;
+    uint eidx = ids[row] * dim + col;
+    atomicAdd(eg[eidx], dc[i]);
+}

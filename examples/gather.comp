@@ -1,0 +1,17 @@
+// RTorch GPU batch embedding-gather. out[i*e+j] = E[ ids[i]*e + j ].
+// binding 0=E(V*e), 1=ids(B u32), 2=P(B,e u32), 3=out(B*e)
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer E { float e[]; };
+layout(set = 0, binding = 1) readonly buffer Ids { uint ids[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer O { float o[]; };
+void main() {
+    uint B = p[0];
+    uint dim = p[1];
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= B * dim) { return; }
+    uint row = i / dim;
+    uint col = i - row * dim;
+    o[i] = e[ ids[row] * dim + col ];
+}

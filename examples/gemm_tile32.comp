@@ -1,0 +1,60 @@
+// RTorch tiled GEMM v2 — 32×32 tile + 4×4 register blocking + vectorized loads.
+// C[r,c] = Σ_k A[r,k]·B[k,c]. binding 0=A,1=B,2=P(M,N,K),3=C. 通用 M/N/K, 越界填 0.
+// 每 workgroup 计算一个 32×32 C tile; 每线程 4×4 输出块(register blocking).
+#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;   // 8×8=64 线程, 每线程 4×4=16 输出
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) readonly buffer B { float b[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer C { float c[]; };
+shared float As[32][32];
+shared float Bs[32][32];
+void main() {
+    uint M = p[0]; uint N = p[1]; uint K = p[2];
+    uint gx = gl_WorkGroupID.x;   // col tile
+    uint gy = gl_WorkGroupID.y;   // row tile
+    uint lx = gl_LocalInvocationID.x;  // 0..7
+    uint ly = gl_LocalInvocationID.y;  // 0..7
+    uint rbase = gy * 32u;        // this tile's row origin
+    uint cbase = gx * 32u;        // this tile's col origin
+    float acc0[4][4];
+    for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) acc0[i][j] = 0.0;
+    uint ntiles = (K + 31u) / 32u;
+    for (uint t = 0u; t < ntiles; ++t) {
+        uint kbase = t * 32u;
+        // 加载 A tile: 每线程读 4 个 A 值(row: ly*4? 分布). 用 8×8 线程加载 32×32.
+        // A[ (rbase+ly*4+i) ][ kbase+lx ] 与 B[ kbase+ly ][ cbase+lx*4+j ] 组合覆盖 32x32.
+        // 简化: 线程 (ly,lx) 加载 A 行 ly*4..+3 (4 row) 的列 lx 和 lx+8,16,24; B 行 ly 的列 lx*4..+3.
+        // A[ri][ki]: ri=rbase+ly*4+i (i=0..3), ki=kbase+lx*4 (vectorized 4)
+        for (int i = 0; i < 4; ++i) {
+            uint ri = rbase + ly * 4u + uint(i);
+            uint ki = kbase + lx * 4u;
+            As[ly * 4u + uint(i)][lx * 4u + 0] = (ri < M && ki < K) ? a[ri * K + ki] : 0.0;
+            As[ly * 4u + uint(i)][lx * 4u + 1] = (ri < M && ki + 1u < K) ? a[ri * K + ki + 1u] : 0.0;
+            As[ly * 4u + uint(i)][lx * 4u + 2] = (ri < M && ki + 2u < K) ? a[ri * K + ki + 2u] : 0.0;
+            As[ly * 4u + uint(i)][lx * 4u + 3] = (ri < M && ki + 3u < K) ? a[ri * K + ki + 3u] : 0.0;
+        }
+        // B[ki][ci]: ki=kbase+ly*4+i, ci=cbase+lx*4+j
+        for (int i = 0; i < 4; ++i) {
+            uint ki = kbase + ly * 4u + uint(i);
+            uint ci = cbase + lx * 4u;
+            Bs[ly * 4u + uint(i)][lx * 4u + 0] = (ki < K && ci < N) ? b[ki * N + ci] : 0.0;
+            Bs[ly * 4u + uint(i)][lx * 4u + 1] = (ki < K && ci + 1u < N) ? b[ki * N + ci + 1u] : 0.0;
+            Bs[ly * 4u + uint(i)][lx * 4u + 2] = (ki < K && ci + 2u < N) ? b[ki * N + ci + 2u] : 0.0;
+            Bs[ly * 4u + uint(i)][lx * 4u + 3] = (ki < K && ci + 3u < N) ? b[ki * N + ci + 3u] : 0.0;
+        }
+        barrier();
+        for (uint kb = 0u; kb < 32u; ++kb) {
+            for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) {
+                acc0[i][j] += As[ly * 4u + uint(i)][kb] * Bs[kb][lx * 4u + uint(j)];
+            }
+        }
+        barrier();
+    }
+    // 写 C: 每线程 4×4 输出
+    for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) {
+        uint r = rbase + ly * 4u + uint(i);
+        uint col = cbase + lx * 4u + uint(j);
+        if (r < M && col < N) { c[r * N + col] = acc0[i][j]; }
+    }
+}

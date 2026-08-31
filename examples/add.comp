@@ -1,0 +1,27 @@
+// RTorch GPU elementwise add with 1-row / 1-col broadcast. out = A + B (out shape = broadcast).
+// binding 0=A(Ar×Ac), 1=B(Br×Bc), 2=P(Ar,Ac,Br,Bc u32), 3=out(Or×Oc)
+// out 形状 = (max(Ar,Br), max(Ac,Bc)). 每线程 1 out 元素; A/B 按各自 shape 索引(不越界).
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) readonly buffer B { float b[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer O { float o[]; };
+void main() {
+    uint Ar = p[0]; uint Ac = p[1]; uint Br = p[2]; uint Bc = p[3];
+    uint Or = (Ar > Br) ? Ar : Br;
+    uint Oc = (Ac > Bc) ? Ac : Bc;
+    uint n = Or * Oc;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= n) { return; }
+    uint row = i / Oc;
+    uint col = i % Oc;
+    // A 索引: row<Ar && col<Ac ? a[row*Ac+col] : 0
+    float av = (row < Ar && col < Ac) ? a[row * Ac + col] : 0.0;
+    // B 索引: 1 row -> col<Bc; Ar? row; 等长
+    float bv = 0.0;
+    if (Br == 1u && Bc >= 1u && col < Bc) { bv = b[col]; }
+    else if (Bc == 1u && row < Br) { bv = b[row * Bc]; }
+    else if (row < Br && col < Bc) { bv = b[row * Bc + col]; }
+    o[i] = av + bv;
+}

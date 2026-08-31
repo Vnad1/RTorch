@@ -1,0 +1,34 @@
+// RTorch GPU Adam (adam) — elemwise, 一次 kernel 完成 m/v/param 更新, 参数全驻留 GPU.
+// 每 thread 1 元素. binding:
+//   0 = p_in (param, readonly)  1 = grad (readonly)  2 = m  3 = v   (in/out, 原位更新)
+//   4 = ps (uint[6]: n, t, lr_bits, b1_bits, b2_bits, eps_bits)  5 = p_out (param 新值)
+// m_new = b1*m + (1-b1)*g ; v_new = b2*v + (1-b2)*g*g ; mh=m_new/(1-b1^t); vh=v_new/(1-b2^t)
+// upd = lr*mh/(sqrt(vh)+eps) ; p_out = p_in - upd.
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer P { float p[]; };
+layout(set = 0, binding = 1) readonly buffer G { float g[]; };
+layout(set = 0, binding = 2) buffer M { float m[]; };
+layout(set = 0, binding = 3) buffer V { float v[]; };
+layout(set = 0, binding = 4) readonly buffer PS { uint ps[]; };
+layout(set = 0, binding = 5) writeonly buffer PO { float po[]; };
+void main() {
+    uint n = ps[0];
+    uint t = ps[1];
+    float lr = uintBitsToFloat(ps[2]);
+    float b1 = uintBitsToFloat(ps[3]);
+    float b2 = uintBitsToFloat(ps[4]);
+    float eps = uintBitsToFloat(ps[5]);
+    uint gi = gl_GlobalInvocationID.x;
+    if (gi >= n) return;
+    float gv = g[gi];
+    float m_new = b1 * m[gi] + (1.0 - b1) * gv;
+    float v_new = b2 * v[gi] + (1.0 - b2) * gv * gv;
+    m[gi] = m_new; v[gi] = v_new;
+    float bc1 = 1.0 - pow(b1, float(t));
+    float bc2 = 1.0 - pow(b2, float(t));
+    float mh = m_new / bc1;
+    float vh = v_new / bc2;
+    float upd = lr * mh / (sqrt(vh) + eps);
+    po[gi] = p[gi] - upd;
+}

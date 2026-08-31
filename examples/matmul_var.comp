@@ -1,0 +1,19 @@
+// RTorch GPU matmul (Var autograd 用). C[i,j] = Σ_k A[i,k]*B[k,j], 维度 M,N,K 经 params 缓冲传入。
+// 绑定约定(对齐 vk_engine: inputs binding 0..n-1, out binding n): 0=A, 1=B, 2=params(M,N,K), 3=C(out)
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) readonly buffer B { float b[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer C { float c[]; };
+void main() {
+    uint M = p[0];
+    uint N = p[1];
+    uint K = p[2];
+    uint i = gl_GlobalInvocationID.x;
+    uint j = gl_GlobalInvocationID.y;
+    if (i >= M || j >= N) { return; }
+    float s = 0.0;
+    for (uint k = 0u; k < K; ++k) { s += a[i * K + k] * b[k * N + j]; }
+    c[i * N + j] = s;
+}

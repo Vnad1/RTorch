@@ -1,0 +1,48 @@
+// RTorch GPU softmax-CE: 逐行(B) softmax over V, 输出 grad(B×V)=softmax-onehot + loss(B)。
+// binding 0=logits(B×V), 1=target(B u32), 2=P(B,V u32), 3=grad(B×V out), 4=loss(B out)
+// 每 row 一个 workgroup(256 线程), V 可任意; shared 规约 max/sum.
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer L { float lg[]; };
+layout(set = 0, binding = 1) readonly buffer T { uint tg[]; };
+layout(set = 0, binding = 2) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 3) writeonly buffer G { float g[]; };
+layout(set = 0, binding = 4) writeonly buffer LS { float ls[]; };
+shared float sdata[256];
+void main() {
+    uint B = p[0];
+    uint V = p[1];
+    uint row = gl_WorkGroupID.x;   // 每 workgroup 一个 row(256 线程规约该 row)
+    uint lid = gl_LocalInvocationID.x;
+    // pass1: 本地 max
+    float m = -1e30;
+    for (uint j = lid; j < V; j += 256u) { m = max(m, lg[row * V + j]); }
+    sdata[lid] = m;
+    barrier();
+    for (uint u = 128u; u > 0u; u >>= 1u) {
+        if (lid < u) { sdata[lid] = max(sdata[lid], sdata[lid + u]); }
+        barrier();
+    }
+    float mval = sdata[0];
+    // pass2: 本地 sum exp
+    float s = 0.0;
+    for (uint j = lid; j < V; j += 256u) { s += exp(lg[row * V + j] - mval); }
+    sdata[lid] = s;
+    barrier();
+    for (uint u = 128u; u > 0u; u >>= 1u) {
+        if (lid < u) { sdata[lid] = sdata[lid] + sdata[lid + u]; }
+        barrier();
+    }
+    float ssum = sdata[0];
+    uint ti = tg[row];
+    // pass3: grad
+    for (uint j = lid; j < V; j += 256u) {
+        float pr = exp(lg[row * V + j] - mval) / ssum;
+        g[row * V + j] = pr - (j == ti ? 1.0 : 0.0);
+    }
+    // pass4: loss 每 row 直接写 (线程 0), 不再下传 grad B×V.
+    if (lid == 0u) {
+        float pt = exp(lg[row * V + ti] - mval) / ssum;
+        ls[row] = -log(max(pt, 1e-12));
+    }
+}

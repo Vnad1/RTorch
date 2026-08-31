@@ -1,0 +1,23 @@
+// RTorch GPU reduce for add-broadcast backward. Fold grad dc(Or×Oc) down to shape (dr×dc_dim),
+// summing over broadcast (repeated) rows/cols. binding 0=dc, 1=P(Or,Oc,dr,dc_dim), 2=out(dr×dc_dim).
+// 每线程处理 out 的一个元素, 累加所有映射到它的 dc 元素. 全 GPU, 无 host.
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer DC { float dc[]; };
+layout(set = 0, binding = 1) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 2) writeonly buffer O { float o[]; };
+void main() {
+    uint Or = p[0]; uint Oc = p[1]; uint dr = p[2]; uint dc_dim = p[3];
+    uint n = dr * dc_dim;
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= n) { return; }
+    uint or_ = i / dc_dim;      // out row (映射到 dc rows)
+    uint oc = i % dc_dim;       // out col
+    float acc = 0.0;
+    for (uint r = or_; r < Or; r += dr) {
+        for (uint c = oc; c < Oc; c += dc_dim) {
+            acc += dc[r * Oc + c];
+        }
+    }
+    o[i] = acc;
+}

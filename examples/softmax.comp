@@ -1,0 +1,28 @@
+// RTorch GPU row-wise softmax. Workgroup per row (like ce.comp): row = gl_WorkGroupID.x,
+// 256 threads over V. C[b,v] = softmax over V. binding 0=A(B×V),1=P(B,V),2=C(B×V).
+#version 450
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) readonly buffer A { float a[]; };
+layout(set = 0, binding = 1) readonly buffer P { uint p[]; };
+layout(set = 0, binding = 2) writeonly buffer C { float c[]; };
+shared float red[256];
+void main() {
+    uint B = p[0]; uint V = p[1];
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    if (row >= B) { return; }
+    // max
+    float m = -1e30;
+    for (uint c0 = tid; c0 < V; c0 += 256u) m = max(m, a[row * V + c0]);
+    red[tid] = m; barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) { if (tid < s) { red[tid] = max(red[tid], red[tid + s]); } barrier(); }
+    float rowmax = red[0];
+    // sum
+    float es = 0.0;
+    for (uint c0 = tid; c0 < V; c0 += 256u) es += exp(a[row * V + c0] - rowmax);
+    red[tid] = es; barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) { if (tid < s) { red[tid] += red[tid + s]; } barrier(); }
+    float tot = red[0];
+    // write
+    for (uint c0 = tid; c0 < V; c0 += 256u) c[row * V + c0] = exp(a[row * V + c0] - rowmax) / max(tot, 1e-12);
+}

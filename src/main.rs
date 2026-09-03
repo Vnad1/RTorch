@@ -17,10 +17,10 @@ use std::time::Instant;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 
-mod vk;
-mod rtw;
-mod loc;
 mod error;
+mod loc;
+mod rtw;
+mod vk;
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -87,11 +87,19 @@ fn main() {
     let gpu_count = report_devices();
 
     // Resolve device: explicit flag wins, else auto (GPU if any).
-    let device = if opts.device >= 0 { opts.device } else if gpu_count > 0 { 1 } else { 0 };
+    let device = if opts.device >= 0 {
+        opts.device
+    } else if gpu_count > 0 {
+        1
+    } else {
+        0
+    };
 
     // Explicit --device gpu with no GPU available must report clearly, not crash.
     if opts.device == 1 && gpu_count == 0 {
-        eprintln!("rtorch: GPU unavailable (no OpenCL/Vulkan compute device found); use --device cpu or check the Vulkan driver");
+        eprintln!(
+            "rtorch: GPU unavailable (no OpenCL/Vulkan compute device found); use --device cpu or check the Vulkan driver"
+        );
         std::process::exit(1);
     }
 
@@ -106,7 +114,9 @@ fn main() {
 
 fn usage() {
     eprintln!("RTorch — universal compute framework (CUDA-free)");
-    eprintln!("usage: rtorch <formula.cpp> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]");
+    eprintln!(
+        "usage: rtorch <formula.cpp> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]"
+    );
     eprintln!("  <formula.cpp> : implements rtorch_output_size + rtorch_compute (see rtorch.h)");
     eprintln!("  --input       : raw byte blobs fed to the formula (repeatable)");
     eprintln!("  --output      : write result blob to file; default stdout");
@@ -120,11 +130,16 @@ fn vk_smoke() {
     let kernel = if mono { "mono" } else { "vec_mul" };
     let spv = match loc::read_kernel(kernel) {
         Ok(s) => s,
-        Err(e) => { eprintln!("vk-smoke: cannot read kernel {kernel}.spv: {e}"); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("vk-smoke: cannot read kernel {kernel}.spv: {e}");
+            std::process::exit(1);
+        }
     };
     let n: usize = 8;
     let a: Vec<u8> = (0..n).flat_map(|i| (i as f32).to_le_bytes()).collect();
-    let b: Vec<u8> = (0..n).flat_map(|i| ((i as f32) * 2.0).to_le_bytes()).collect();
+    let b: Vec<u8> = (0..n)
+        .flat_map(|i| ((i as f32) * 2.0).to_le_bytes())
+        .collect();
     let out_len = n * 4;
     let groups = [((n as u32) + 255) / 256, 1, 1];
     let inputs;
@@ -136,15 +151,24 @@ fn vk_smoke() {
     let in_sizes: Vec<usize> = inputs.iter().map(|b| b.len()).collect();
     let mut session = match vk::VkSession::init(&spv, &in_sizes, out_len) {
         Ok(s) => s,
-        Err(e) => { eprintln!("vk-smoke: vulkan init failed: {e}"); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("vk-smoke: vulkan init failed: {e}");
+            std::process::exit(1);
+        }
     };
     let mut out = vec![0u8; out_len];
     match session.dispatch(&inputs, groups, &mut out) {
         Ok(_) => {}
-        Err(e) => { eprintln!("vk-smoke: vulkan run failed: {e}"); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("vk-smoke: vulkan run failed: {e}");
+            std::process::exit(1);
+        }
     }
     {
-        let vals: Vec<f32> = out.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let vals: Vec<f32> = out
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
         println!("vk-smoke: result -> {:?}", &vals[..n]);
         let ok = if mono {
             (0..n).all(|i| (vals[i] - (i as f32 + 1.0)).abs() < 1e-4)
@@ -173,33 +197,58 @@ fn parse_args(args: &[String]) -> Option<Opts> {
     while i < args.len() {
         let a = &args[i];
         match a.as_str() {
-            "--input" => { i += 1; inputs.push(PathBuf::from(args.get(i)?)); }
-            "--output" => { i += 1; output = Some(PathBuf::from(args.get(i)?)); }
+            "--input" => {
+                i += 1;
+                inputs.push(PathBuf::from(args.get(i)?));
+            }
+            "--output" => {
+                i += 1;
+                output = Some(PathBuf::from(args.get(i)?));
+            }
             "--device" => {
                 i += 1;
                 let d = args.get(i)?;
-                if d.eq_ignore_ascii_case("gpu") { device = 1; }
-                else if d.eq_ignore_ascii_case("cpu") { device = 0; }
+                if d.eq_ignore_ascii_case("gpu") {
+                    device = 1;
+                } else if d.eq_ignore_ascii_case("cpu") {
+                    device = 0;
+                }
             }
             "with" => after_with = true,
             _ => {
                 if !after_with {
-                    if formula.is_none() { formula = Some(a.clone()); }
-                    else { refs.push(a.clone()); }
-                } else { refs.push(a.clone()); }
+                    if formula.is_none() {
+                        formula = Some(a.clone());
+                    } else {
+                        refs.push(a.clone());
+                    }
+                } else {
+                    refs.push(a.clone());
+                }
             }
         }
         i += 1;
     }
 
-    Some(Opts { formula: formula?, refs, inputs, output, device })
+    Some(Opts {
+        formula: formula?,
+        refs,
+        inputs,
+        output,
+        device,
+    })
 }
 
 fn find_compiler() -> Option<PathBuf> {
     if let Ok(p) = env::var("RTORCH_GXX") {
         let p = PathBuf::from(&p);
-        if p.exists() { return Some(p); }
-        eprintln!("rtorch: warning: RTORCH_GXX set but not found: {}", p.display());
+        if p.exists() {
+            return Some(p);
+        }
+        eprintln!(
+            "rtorch: warning: RTORCH_GXX set but not found: {}",
+            p.display()
+        );
     }
     // Machine-agnostic: `where g++` (no hardcoded install paths in code).
     for name in ["g++.exe", "gcc.exe"] {
@@ -227,23 +276,36 @@ fn run(opts: &Opts, device: i32) -> error::Result<()> {
         let dstr = dir.display().to_string();
         if !path.split(';').any(|p| p.eq_ignore_ascii_case(&dstr)) {
             let newpath = format!("{};{}", dstr, path);
-            unsafe { let _ = env::set_var("PATH", newpath); }
+            unsafe {
+                let _ = env::set_var("PATH", newpath);
+            }
         }
     }
 
     let formula_path = Path::new(&opts.formula);
     if !formula_path.exists() {
-        return Err(error::RtorchError::io(format!("formula not found: {}", opts.formula)));
+        return Err(error::RtorchError::io(format!(
+            "formula not found: {}",
+            opts.formula
+        )));
     }
 
-    let out_dll = env::current_dir().ok().unwrap_or_else(|| env::temp_dir())
+    let out_dll = env::current_dir()
+        .ok()
+        .unwrap_or_else(|| env::temp_dir())
         .join(format!("rtorch_rt_{}.dll", std::process::id()));
     let _ = std::fs::remove_file(&out_dll);
 
     let mut cmd = Command::new(&compiler);
-    cmd.arg("-shared").arg("-fPIC").arg("-O3").arg("-std=c++17")
-        .arg("-march=native").arg("-ffast-math").arg("-funroll-loops")
-        .arg("-static-libgcc").arg("-static-libstdc++")
+    cmd.arg("-shared")
+        .arg("-fPIC")
+        .arg("-O3")
+        .arg("-std=c++17")
+        .arg("-march=native")
+        .arg("-ffast-math")
+        .arg("-funroll-loops")
+        .arg("-static-libgcc")
+        .arg("-static-libstdc++")
         .arg(formula_path);
     // include formula dir + ref dirs so `#include "rtorch.h"` resolves.
     if let Some(dir) = formula_path.parent() {
@@ -265,7 +327,9 @@ fn run(opts: &Opts, device: i32) -> error::Result<()> {
     let st = cmd.status()?;
     if !st.success() {
         let _ = std::fs::remove_file(&out_dll);
-        return Err(error::RtorchError::compile("compilation of formula failed (see g++ output above)"));
+        return Err(error::RtorchError::compile(
+            "compilation of formula failed (see g++ output above)",
+        ));
     }
 
     // Read inputs.
@@ -310,12 +374,18 @@ fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> error::Result
     if let (Some(out_size), Some(compute)) = (out_size, compute) {
         let in_blobs: Vec<Blob> = inputs
             .iter()
-            .map(|b| Blob { data: b.as_ptr() as *const std::ffi::c_void, len: b.len() })
+            .map(|b| Blob {
+                data: b.as_ptr() as *const std::ffi::c_void,
+                len: b.len(),
+            })
             .collect();
         let n = in_blobs.len() as i32;
         let want = unsafe { out_size(n, in_blobs.as_ptr(), device) } as usize;
         let mut out_buf = vec![0u8; want];
-        let mut out_blob = Blob { data: out_buf.as_ptr() as *const std::ffi::c_void, len: out_buf.len() };
+        let mut out_blob = Blob {
+            data: out_buf.as_ptr() as *const std::ffi::c_void,
+            len: out_buf.len(),
+        };
 
         eprintln!("[rtorch] device={device} inputs={n} output={want} bytes");
 
@@ -323,10 +393,15 @@ fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> error::Result
         let rc = unsafe { compute(n, in_blobs.as_ptr(), &mut out_blob, device) };
         let elapsed = t0.elapsed();
 
-        eprintln!("[rtorch] compute rc={rc} elapsed={:.3} ms", elapsed.as_secs_f64() * 1000.0);
+        eprintln!(
+            "[rtorch] compute rc={rc} elapsed={:.3} ms",
+            elapsed.as_secs_f64() * 1000.0
+        );
         if rc != 0 {
             unsafe { FreeLibrary(handle) };
-            return Err(error::RtorchError::load(format!("formula compute failed rc={rc}")));
+            return Err(error::RtorchError::load(format!(
+                "formula compute failed rc={rc}"
+            )));
         }
         // The formula may set out->len to the true number of bytes written.
         let actual = out_blob.len.min(out_buf.len());
@@ -350,7 +425,11 @@ fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> error::Result
 }
 
 fn load_dll(dll: &Path) -> std::io::Result<*mut std::ffi::c_void> {
-    let wpath: Vec<u16> = dll.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wpath: Vec<u16> = dll
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let handle = unsafe { LoadLibraryW(wpath.as_ptr()) };
     if handle.is_null() {
         return Err(std::io::Error::last_os_error());
@@ -363,8 +442,13 @@ fn load_dll(dll: &Path) -> std::io::Result<*mut std::ffi::c_void> {
 fn find_glslang() -> Option<PathBuf> {
     if let Ok(p) = env::var("RTORCH_GLSLANG") {
         let p = Path::new(&p);
-        if p.exists() { return Some(p.to_path_buf()); }
-        eprintln!("rtorch: warning: RTORCH_GLSLANG set but not found: {}", p.display());
+        if p.exists() {
+            return Some(p.to_path_buf());
+        }
+        eprintln!(
+            "rtorch: warning: RTORCH_GLSLANG set but not found: {}",
+            p.display()
+        );
     }
     let mut cands: Vec<PathBuf> = Vec::new();
     if let Ok(sdk) = env::var("VULKAN_SDK") {
@@ -377,7 +461,10 @@ fn find_glslang() -> Option<PathBuf> {
         let mut vers: Vec<PathBuf> = Vec::new();
         for e in rd.flatten() {
             let p = e.path();
-            if p.file_name().map(|n| n.to_string_lossy().starts_with('1')).unwrap_or(false) {
+            if p.file_name()
+                .map(|n| n.to_string_lossy().starts_with('1'))
+                .unwrap_or(false)
+            {
                 vers.push(p);
             }
         }
@@ -397,24 +484,34 @@ fn find_glslang() -> Option<PathBuf> {
         cands.push(exe.join("..").join("tools").join("bin").join("glslang.exe"));
     }
     for c in cands {
-        if c.exists() { return Some(c); }
+        if c.exists() {
+            return Some(c);
+        }
     }
     None
 }
 
 // Compile a GLSL compute shader to SPIR-V via glslang. Returns SPIR-V bytes.
 fn compile_glsl_to_spv(glsl: &str) -> std::io::Result<Vec<u8>> {
-    let glslang = find_glslang()
-        .ok_or_else(|| std::io::Error::other("glslangValidator not found (needed for GPU kernels)"))?;
+    let glslang = find_glslang().ok_or_else(|| {
+        std::io::Error::other("glslangValidator not found (needed for GPU kernels)")
+    })?;
     let dir = env::temp_dir();
     let comp = dir.join(format!("rtorch_k_{}.comp", std::process::id()));
     let spv = dir.join(format!("rtorch_k_{}.spv", std::process::id()));
     std::fs::write(&comp, glsl.as_bytes())?;
     let _ = std::fs::remove_file(&spv);
-    let st = Command::new(&glslang).arg("-V").arg(&comp).arg("-o").arg(&spv).status()?;
+    let st = Command::new(&glslang)
+        .arg("-V")
+        .arg(&comp)
+        .arg("-o")
+        .arg(&spv)
+        .status()?;
     if !st.success() {
         let _ = std::fs::remove_file(&comp);
-        return Err(std::io::Error::other("glslang compilation of GPU kernel failed (see glslang output)"));
+        return Err(std::io::Error::other(
+            "glslang compilation of GPU kernel failed (see glslang output)",
+        ));
     }
     let bytes = std::fs::read(&spv)?;
     let _ = std::fs::remove_file(&comp);
@@ -434,14 +531,21 @@ fn execute_gpu(
     let glsl_ptr = unsafe { gk() };
     if glsl_ptr.is_null() {
         unsafe { FreeLibrary(handle) };
-        return Err(error::RtorchError::compile("formula returned null GLSL kernel"));
+        return Err(error::RtorchError::compile(
+            "formula returned null GLSL kernel",
+        ));
     }
-    let glsl = unsafe { std::ffi::CStr::from_ptr(glsl_ptr) }.to_string_lossy().into_owned();
+    let glsl = unsafe { std::ffi::CStr::from_ptr(glsl_ptr) }
+        .to_string_lossy()
+        .into_owned();
 
     // output length
     let in_blobs: Vec<Blob> = inputs
         .iter()
-        .map(|b| Blob { data: b.as_ptr() as *const std::ffi::c_void, len: b.len() })
+        .map(|b| Blob {
+            data: b.as_ptr() as *const std::ffi::c_void,
+            len: b.len(),
+        })
         .collect();
     let n = in_blobs.len() as i32;
     let want = match out_size {
@@ -458,7 +562,10 @@ fn execute_gpu(
     }
 
     let spv = compile_glsl_to_spv(&glsl)?;
-    eprintln!("[rtorch] gpu kernel compiled ({} bytes spv), groups=({gx},{gy},{gz}), out={want} B", spv.len());
+    eprintln!(
+        "[rtorch] gpu kernel compiled ({} bytes spv), groups=({gx},{gy},{gz}), out={want} B",
+        spv.len()
+    );
     let groups = [gx.max(1) as u32, gy.max(1) as u32, gz.max(1) as u32];
 
     // Persistent session: init Vulkan context once, then a warmup + repeated
@@ -468,16 +575,21 @@ fn execute_gpu(
     let mut session = vk::VkSession::init(&spv, &input_sizes, want)?;
     let mut out = vec![0u8; want];
 
-    let reps = std::env::var("RTORCH_VK_REPS").ok().and_then(|s| s.parse::<usize>().ok()).unwrap_or(8);
+    let reps = std::env::var("RTORCH_VK_REPS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(8);
     // warmup (covers first-launch/JIT/pipeline cache)
     session.dispatch(inputs, groups, &mut out)?;
     let mut best = f64::INFINITY;
     for _ in 0..reps {
         if let Ok(ms) = session.dispatch(inputs, groups, &mut out) {
-            if ms < best { best = ms; }
+            if ms < best {
+                best = ms;
+            }
         }
     }
-    eprintln!("[rtorch] gpu dispatch avg(best) elapsed={best:.3} ms over {reps} reps", );
+    eprintln!("[rtorch] gpu dispatch avg(best) elapsed={best:.3} ms over {reps} reps",);
     unsafe { FreeLibrary(handle) };
     Ok(out)
 }
@@ -488,7 +600,10 @@ fn load_symbol<T: Copy>(handle: *mut std::ffi::c_void, name: &str) -> Option<T> 
     if p.is_null() {
         None
     } else {
-        debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut std::ffi::c_void>());
+        debug_assert_eq!(
+            std::mem::size_of::<T>(),
+            std::mem::size_of::<*mut std::ffi::c_void>()
+        );
         Some(unsafe { std::mem::transmute_copy::<*mut std::ffi::c_void, T>(&p) })
     }
 }
@@ -504,11 +619,24 @@ const CL_DEVICE_TYPE_GPU: u64 = (1 << 0);
 const CL_PLATFORM_NAME: u32 = 0x0902;
 
 #[cfg(windows)]
-type clGetPlatformIDs_t = unsafe extern "system" fn(u32, *mut *mut std::ffi::c_void, *mut u32) -> i32;
+type clGetPlatformIDs_t =
+    unsafe extern "system" fn(u32, *mut *mut std::ffi::c_void, *mut u32) -> i32;
 #[cfg(windows)]
-type clGetDeviceIDs_t = unsafe extern "system" fn(*mut std::ffi::c_void, u64, u32, *mut *mut std::ffi::c_void, *mut u32) -> i32;
+type clGetDeviceIDs_t = unsafe extern "system" fn(
+    *mut std::ffi::c_void,
+    u64,
+    u32,
+    *mut *mut std::ffi::c_void,
+    *mut u32,
+) -> i32;
 #[cfg(windows)]
-type clGetInfo_t = unsafe extern "system" fn(*mut std::ffi::c_void, u32, usize, *mut std::ffi::c_void, *mut usize) -> i32;
+type clGetInfo_t = unsafe extern "system" fn(
+    *mut std::ffi::c_void,
+    u32,
+    usize,
+    *mut std::ffi::c_void,
+    *mut usize,
+) -> i32;
 
 #[cfg(windows)]
 fn resolve_fn<T: Copy>(h: *mut std::ffi::c_void, name: &str) -> Option<T> {
@@ -517,14 +645,21 @@ fn resolve_fn<T: Copy>(h: *mut std::ffi::c_void, name: &str) -> Option<T> {
     if p.is_null() {
         None
     } else {
-        debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut std::ffi::c_void>());
+        debug_assert_eq!(
+            std::mem::size_of::<T>(),
+            std::mem::size_of::<*mut std::ffi::c_void>()
+        );
         Some(unsafe { std::mem::transmute_copy::<*mut std::ffi::c_void, T>(&p) })
     }
 }
 
 #[cfg(windows)]
 fn report_devices() -> u32 {
-    let w: Vec<u16> = b"OpenCL.dll\0".iter().map(|&b| b as u16).chain(std::iter::once(0)).collect();
+    let w: Vec<u16> = b"OpenCL.dll\0"
+        .iter()
+        .map(|&b| b as u16)
+        .chain(std::iter::once(0))
+        .collect();
     let h = unsafe { LoadLibraryW(w.as_ptr()) };
     if h.is_null() {
         println!("[rtorch] OpenCL: OpenCL.dll not found; host-only.");
@@ -566,9 +701,22 @@ fn report_devices() -> u32 {
             let mut buf = [0u8; 256];
             let mut sz: usize = 0;
             if let Some(f) = get_info {
-                unsafe { f(d, CL_DEVICE_NAME, buf.len(), buf.as_mut_ptr().cast(), &mut sz) };
+                unsafe {
+                    f(
+                        d,
+                        CL_DEVICE_NAME,
+                        buf.len(),
+                        buf.as_mut_ptr().cast(),
+                        &mut sz,
+                    )
+                };
             }
-            let name = String::from_utf8_lossy(&buf[..sz.min(buf.len())].split(|&b| b == 0).next().unwrap_or(&[]));
+            let name = String::from_utf8_lossy(
+                &buf[..sz.min(buf.len())]
+                    .split(|&b| b == 0)
+                    .next()
+                    .unwrap_or(&[]),
+            );
             println!("[rtorch] OpenCL device: {name}");
             gpu_total += 1;
         }
@@ -592,12 +740,23 @@ fn report_devices() -> u32 {
 fn rtw_subcommand(args: &[String]) -> i32 {
     match args[1].as_str() {
         "--dump" => {
-            if args.len() < 3 { eprintln!("usage: rtorch --dump <x.rtw>"); return 2; }
+            if args.len() < 3 {
+                eprintln!("usage: rtorch --dump <x.rtw>");
+                return 2;
+            }
             let bytes = match rtw::read_file(std::path::Path::new(&args[2])) {
-                Ok(b) => b, Err(e) => { eprintln!("rtorch: {e}"); return 1; }
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("rtorch: {e}");
+                    return 1;
+                }
             };
             let rtw = match rtw::decode(&bytes) {
-                Ok(r) => r, Err(e) => { eprintln!("rtorch: {e}"); return 1; }
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("rtorch: {e}");
+                    return 1;
+                }
             };
             println!("kind = {}", render_kind(rtw.kind));
             println!("dtype = {}", rtw::dtype_name(rtw.dtype));
@@ -605,13 +764,21 @@ fn rtw_subcommand(args: &[String]) -> i32 {
             println!("count = {}", rtw.count());
             println!("bytes = {}", rtw.data.len());
             if rtw.kernel.is_some() {
-                println!("kernel = embedded formula source ({} bytes)", rtw.kernel.as_ref().unwrap().len());
+                println!(
+                    "kernel = embedded formula source ({} bytes)",
+                    rtw.kernel.as_ref().unwrap().len()
+                );
             }
             if rtw.kind == rtw::KIND_RESULT && rtw.dtype == rtw::DTYPE_FP32 {
                 println!("data (first 12 fp32):");
                 let n = rtw.data.len() / 4;
                 for i in 0..n.min(12) {
-                    let v = f32::from_le_bytes([rtw.data[i*4], rtw.data[i*4+1], rtw.data[i*4+2], rtw.data[i*4+3]]);
+                    let v = f32::from_le_bytes([
+                        rtw.data[i * 4],
+                        rtw.data[i * 4 + 1],
+                        rtw.data[i * 4 + 2],
+                        rtw.data[i * 4 + 3],
+                    ]);
                     println!("  [{i}] = {v}");
                 }
             }
@@ -624,16 +791,28 @@ fn rtw_subcommand(args: &[String]) -> i32 {
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
-                    "-o" => { i += 1; out = args.get(i).cloned(); }
-                    _ => { if formula.is_none() { formula = Some(args[i].clone()); } }
+                    "-o" => {
+                        i += 1;
+                        out = args.get(i).cloned();
+                    }
+                    _ => {
+                        if formula.is_none() {
+                            formula = Some(args[i].clone());
+                        }
+                    }
                 }
                 i += 1;
             }
             let (Some(f), Some(o)) = (formula, out) else {
-                eprintln!("usage: rtorch --pack <formula.cpp> -o <x.rtw>"); return 2;
+                eprintln!("usage: rtorch --pack <formula.cpp> -o <x.rtw>");
+                return 2;
             };
             let src = match std::fs::read(&f) {
-                Ok(s) => s, Err(e) => { eprintln!("rtorch: {e}"); return 1; }
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("rtorch: {e}");
+                    return 1;
+                }
             };
             let src_len = src.len();
             let rtw = rtw::Rtw {
@@ -644,11 +823,23 @@ fn rtw_subcommand(args: &[String]) -> i32 {
                 kernel: Some(src),
             };
             match rtw::write_file(std::path::Path::new(&o), &rtw::encode(&rtw)) {
-                Ok(_) => { println!("[rtw] packed {f} -> {o} (kind=kernel, {} bytes)\n  run: rtorch {o} --input <data> [--device gpu]", src_len); 0 }
-                Err(e) => { eprintln!("rtorch: {e}"); 1 }
+                Ok(_) => {
+                    println!(
+                        "[rtw] packed {f} -> {o} (kind=kernel, {} bytes)\n  run: rtorch {o} --input <data> [--device gpu]",
+                        src_len
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("rtorch: {e}");
+                    1
+                }
             }
         }
-        _ => { eprintln!("unknown subcommand"); 2 }
+        _ => {
+            eprintln!("unknown subcommand");
+            2
+        }
     }
 }
 
@@ -667,13 +858,24 @@ fn render_kind(k: u8) -> &'static str {
 // the standard compile/run pipeline.
 fn run_rtw_file(args: &[String]) -> i32 {
     let bytes = match rtw::read_file(std::path::Path::new(&args[1])) {
-        Ok(b) => b, Err(e) => { eprintln!("rtorch: {e}"); return 1; }
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("rtorch: {e}");
+            return 1;
+        }
     };
     let rtw = match rtw::decode(&bytes) {
-        Ok(r) => r, Err(e) => { eprintln!("rtorch: {e}"); return 1; }
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("rtorch: {e}");
+            return 1;
+        }
     };
     if rtw.kind != rtw::KIND_KERNEL {
-        eprintln!("rtorch: {} is kind=result (not runnable); use --dump to inspect", args[1]);
+        eprintln!(
+            "rtorch: {} is kind=result (not runnable); use --dump to inspect",
+            args[1]
+        );
         return 2;
     }
     let Some(kernel_src) = &rtw.kernel else {
@@ -682,34 +884,48 @@ fn run_rtw_file(args: &[String]) -> i32 {
     };
     // write the embedded formula to a temp .cpp in the current dir (so
     // `#include "rtorch.h"` resolves against the project root), then run().
-    let tmp = env::current_dir().unwrap_or_else(|_| env::temp_dir())
+    let tmp = env::current_dir()
+        .unwrap_or_else(|_| env::temp_dir())
         .join(format!("rtorch_rtw_{}.cpp", std::process::id()));
     if let Err(e) = std::fs::write(&tmp, kernel_src) {
         eprintln!("rtorch: write temp formula: {e}");
         return 1;
     }
-    let mut run_args: Vec<String> = vec![
-        String::from("rtorch"),
-        tmp.to_string_lossy().to_string(),
-    ];
+    let mut run_args: Vec<String> = vec![String::from("rtorch"), tmp.to_string_lossy().to_string()];
     // copy through --input / --device / --output / with refs
     let mut i = 2;
     while i < args.len() {
         let a = args[i].clone();
         if a == "--input" || a == "--output" || a == "--device" {
             run_args.push(a);
-            if i + 1 < args.len() { run_args.push(args[i + 1].clone()); i += 1; }
+            if i + 1 < args.len() {
+                run_args.push(args[i + 1].clone());
+                i += 1;
+            }
         }
         i += 1;
     }
     let opts = match parse_args(&run_args) {
-        Some(o) => o, None => { eprintln!("rtorch: bad args for container"); return 2; }
+        Some(o) => o,
+        None => {
+            eprintln!("rtorch: bad args for container");
+            return 2;
+        }
     };
     let gpu_count = report_devices();
-    let device = if opts.device >= 0 { opts.device } else if gpu_count > 0 { 1 } else { 0 };
+    let device = if opts.device >= 0 {
+        opts.device
+    } else if gpu_count > 0 {
+        1
+    } else {
+        0
+    };
     let rc = match run(&opts, device) {
         Ok(_) => 0,
-        Err(e) => { eprintln!("rtorch: {e}"); 1 }
+        Err(e) => {
+            eprintln!("rtorch: {e}");
+            1
+        }
     };
     let _ = std::fs::remove_file(&tmp);
     rc

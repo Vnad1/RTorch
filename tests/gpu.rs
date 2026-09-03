@@ -22,14 +22,24 @@ fn gpu_matmul_small_matches_cpu_reference() {
     for i in 0..m {
         for j in 0..n {
             let mut s = 0.0f32;
-            for kk in 0..k { s += a[i * k + kk] * b[kk * n + j]; }
+            for kk in 0..k {
+                s += a[i * k + kk] * b[kk * n + j];
+            }
             refc[i * n + j] = s;
         }
     }
     for i in 0..m * n {
         let abs = (c[i] - refc[i]).abs();
         let rel = abs / refc[i].abs().max(1e-6);
-        assert!(abs < 1e-2 || rel < 1e-2, "c[{}]={} cpu={} (abs={} rel={})", i, c[i], refc[i], abs, rel);
+        assert!(
+            abs < 1e-2 || rel < 1e-2,
+            "c[{}]={} cpu={} (abs={} rel={})",
+            i,
+            c[i],
+            refc[i],
+            abs,
+            rel
+        );
     }
 }
 
@@ -39,13 +49,24 @@ fn gpu_matmul_identity_is_a() {
     let (m, k, n) = (3usize, 3usize, 3usize);
     let a: Vec<f32> = vec![1.0, 2.0, 3.0, -1.0, 0.5, 2.0, 7.0, 0.0, -4.0];
     let mut i3 = vec![0.0f32; 9];
-    i3[0] = 1.0; i3[4] = 1.0; i3[8] = 1.0;
+    i3[0] = 1.0;
+    i3[4] = 1.0;
+    i3[8] = 1.0;
     let c = match matmul_gpu(&a, &i3, m, n, k) {
         Ok(c) => c,
-        Err(e) => { eprintln!("GPU unavailable, skipping: {e}"); return; }
+        Err(e) => {
+            eprintln!("GPU unavailable, skipping: {e}");
+            return;
+        }
     };
     for i in 0..9 {
-        assert!((c[i] - a[i]).abs() < 1e-2, "c[{}]={} expected {}", i, c[i], a[i]);
+        assert!(
+            (c[i] - a[i]).abs() < 1e-2,
+            "c[{}]={} expected {}",
+            i,
+            c[i],
+            a[i]
+        );
     }
 }
 
@@ -63,22 +84,41 @@ fn cpu_gpu_numerical_agreement() {
     let mut cpu = vec![0.0f64; m * n];
     let mut af = vec![0.0f32; m * k];
     let mut bf = vec![0.0f32; k * n];
-    for i in 0..m * k { af[i] = a[i] as f32; }
-    for i in 0..k * n { bf[i] = b[i] as f32; }
-    for i in 0..m { for j in 0..n {
-        let mut s = 0.0f64;
-        for kk in 0..k { s += a[i * k + kk] * b[kk * n + j]; }
-        cpu[i * n + j] = s;
-    }}
+    for i in 0..m * k {
+        af[i] = a[i] as f32;
+    }
+    for i in 0..k * n {
+        bf[i] = b[i] as f32;
+    }
+    for i in 0..m {
+        for j in 0..n {
+            let mut s = 0.0f64;
+            for kk in 0..k {
+                s += a[i * k + kk] * b[kk * n + j];
+            }
+            cpu[i * n + j] = s;
+        }
+    }
 
     let cg = match matmul_gpu(&af, &bf, m, n, k) {
         Ok(c) => c,
-        Err(e) => { eprintln!("GPU unavailable, skipping: {e}"); return; }
+        Err(e) => {
+            eprintln!("GPU unavailable, skipping: {e}");
+            return;
+        }
     };
 
     for i in 0..m * n {
         let abs = (cg[i] as f64 - cpu[i]).abs();
         let rel = abs / cpu[i].abs().max(1e-6);
-        assert!(abs < 1e-2 || rel < 1e-3, "mismatch[{}] gpu={} cpu={} (abs={} rel={})", i, cg[i], cpu[i], abs, rel);
+        assert!(
+            abs < 1e-2 || rel < 1e-3,
+            "mismatch[{}] gpu={} cpu={} (abs={} rel={})",
+            i,
+            cg[i],
+            cpu[i],
+            abs,
+            rel
+        );
     }
 }

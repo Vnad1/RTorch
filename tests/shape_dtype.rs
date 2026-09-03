@@ -24,11 +24,16 @@ fn shape_numel_rank_strides() {
 #[test]
 fn from_shape_multi_dim_projects_2d() {
     // A [B=2, T=3, D=4] tensor stored contiguous; r=B, c=T*D for the 2D op path.
-    let t = Tensor::from_shape((0..24).map(|i| i as f64).collect(), vec![2, 3, 4], DType::F64).unwrap();
+    let t = Tensor::from_shape(
+        (0..24).map(|i| i as f64).collect(),
+        vec![2, 3, 4],
+        DType::F64,
+    )
+    .unwrap();
     assert_eq!(t.shape(), Shape::new(vec![2, 3, 4]));
     assert_eq!(t.numel(), 24);
     assert_eq!((t.r, t.c), (2, 12)); // 2D projection: [2, 12]
-    assert_eq!(t.data[5], 5.0);      // linear layout preserved
+    assert_eq!(t.data[5], 5.0); // linear layout preserved
 }
 
 #[test]
@@ -39,7 +44,10 @@ fn reshape_and_view_match_numel() {
     assert_eq!(r.dims, vec![3, 2]);
     let v = t.view(vec![6, 1]).unwrap();
     assert_eq!((v.r, v.c), (6, 1));
-    assert!(t.reshape(vec![4, 2]).is_err(), "reshape numel mismatch must error");
+    assert!(
+        t.reshape(vec![4, 2]).is_err(),
+        "reshape numel mismatch must error"
+    );
 }
 
 #[test]
@@ -56,7 +64,10 @@ fn dtype_mismatch_add_panics() {
     let a = Tensor::from_data(vec![1.0], 1, 1).as_dtype(DType::F16);
     let b = Tensor::from_data(vec![2.0], 1, 1).as_dtype(DType::F64);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tensor::add(&a, &b)));
-    assert!(r.is_err(), "add with differing dtype must error, not silently promote");
+    assert!(
+        r.is_err(),
+        "add with differing dtype must error, not silently promote"
+    );
 }
 
 #[test]

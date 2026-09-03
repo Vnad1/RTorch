@@ -21,36 +21,57 @@ enum GVarNode {
     Add(GVar, GVar, usize, usize),           // a, b, r, c
     Tanh(GVar, usize, usize),
     Scale(GVar, f64, usize, usize),
-    Gather(GVar, Vec<usize>, usize),         // emb, ids, e  (batch lookup: out[B×e])
+    Gather(GVar, Vec<usize>, usize), // emb, ids, e  (batch lookup: out[B×e])
 }
 
 pub fn leaf(ctx: Rc<GpuContext>, data: Vec<f64>, r: usize, c: usize) -> GVar {
     let f = gpu_tensor::f64_to_f32(&data);
     let t = GpuTensor::from_data(ctx, &f, r, c);
-    Rc::new(RefCell::new(GVarData { t, grad: None, parent: None }))
+    Rc::new(RefCell::new(GVarData {
+        t,
+        grad: None,
+        parent: None,
+    }))
 }
 
 fn wrap(ctx: Rc<GpuContext>, t: GpuTensor, p: GVarNode) -> GVar {
-    Rc::new(RefCell::new(GVarData { t, grad: None, parent: Some(Rc::new(p)) }))
+    Rc::new(RefCell::new(GVarData {
+        t,
+        grad: None,
+        parent: Some(Rc::new(p)),
+    }))
 }
 
 pub fn from_f32(ctx: Rc<GpuContext>, f: Vec<f32>, r: usize, c: usize) -> GVar {
     let t = GpuTensor::from_data(ctx, &f, r, c);
-    Rc::new(RefCell::new(GVarData { t, grad: None, parent: None }))
+    Rc::new(RefCell::new(GVarData {
+        t,
+        grad: None,
+        parent: None,
+    }))
 }
 
-pub fn len(v: &GVar) -> usize { v.borrow().t.r * v.borrow().t.c }
+pub fn len(v: &GVar) -> usize {
+    v.borrow().t.r * v.borrow().t.c
+}
 
 // ---- forward ops (device-side) ----
 pub fn matmul(a: &GVar, b: &GVar) -> GVar {
     let (m, k, n) = (a.borrow().t.r, a.borrow().t.c, b.borrow().t.c);
     let t = gpu_tensor::matmul(&a.borrow().t, &b.borrow().t);
     let ctx = Rc::clone(&t.ctx);
-    wrap(ctx, t, GVarNode::MatMul(Rc::clone(a), Rc::clone(b), m, k, n))
+    wrap(
+        ctx,
+        t,
+        GVarNode::MatMul(Rc::clone(a), Rc::clone(b), m, k, n),
+    )
 }
 
 pub fn add(a: &GVar, b: &GVar) -> GVar {
-    let (r, c) = (a.borrow().t.r.max(b.borrow().t.r), a.borrow().t.c.max(b.borrow().t.c));
+    let (r, c) = (
+        a.borrow().t.r.max(b.borrow().t.r),
+        a.borrow().t.c.max(b.borrow().t.c),
+    );
     let t = gpu_tensor::add(&a.borrow().t, &b.borrow().t);
     let ctx = Rc::clone(&t.ctx);
     wrap(ctx, t, GVarNode::Add(Rc::clone(a), Rc::clone(b), r, c))
@@ -79,7 +100,9 @@ pub fn gather(emb: &GVar, ids: &[usize], b: usize) -> GVar {
 }
 
 /// Set (or overwrite) the output gradient (device-side). `g` must be r×c.
-pub fn set_grad(out: &GVar, g: GpuTensor) { out.borrow_mut().grad = Some(g); }
+pub fn set_grad(out: &GVar, g: GpuTensor) {
+    out.borrow_mut().grad = Some(g);
+}
 
 pub struct GVarContext {
     pub ctx: Rc<GpuContext>,
@@ -102,11 +125,18 @@ fn topo(out: &GVar) -> Vec<GVar> {
     let mut visited = std::collections::HashSet::new();
     fn dfs(v: &GVar, order: &mut Vec<GVar>, visited: &mut std::collections::HashSet<usize>) {
         let id = Rc::as_ptr(v) as usize;
-        if !visited.insert(id) { return; }
+        if !visited.insert(id) {
+            return;
+        }
         if let Some(p) = v.borrow().parent.clone() {
             match &*p {
-                GVarNode::MatMul(a, b, ..) | GVarNode::Add(a, b, ..) => { dfs(a, order, visited); dfs(b, order, visited); }
-                GVarNode::Tanh(a, ..) | GVarNode::Scale(a, ..) | GVarNode::Gather(a, _, _) => { dfs(a, order, visited); }
+                GVarNode::MatMul(a, b, ..) | GVarNode::Add(a, b, ..) => {
+                    dfs(a, order, visited);
+                    dfs(b, order, visited);
+                }
+                GVarNode::Tanh(a, ..) | GVarNode::Scale(a, ..) | GVarNode::Gather(a, _, _) => {
+                    dfs(a, order, visited);
+                }
             }
         }
         order.push(Rc::clone(v));
@@ -128,7 +158,9 @@ pub fn backward(out: &GVar) {
 pub fn backward_multi(outs: &[GVar]) {
     let mut order = Vec::new();
     let mut visited = std::collections::HashSet::new();
-    for o in outs { dfs(o, &mut order, &mut visited); }
+    for o in outs {
+        dfs(o, &mut order, &mut visited);
+    }
     backprop(&order);
 }
 
@@ -175,18 +207,27 @@ fn backprop(order: &[GVar]) {
 
 fn dfs(v: &GVar, order: &mut Vec<GVar>, visited: &mut std::collections::HashSet<usize>) {
     let id = Rc::as_ptr(v) as usize;
-    if !visited.insert(id) { return; }
+    if !visited.insert(id) {
+        return;
+    }
     if let Some(p) = v.borrow().parent.clone() {
         match &*p {
-            GVarNode::MatMul(a, b, ..) | GVarNode::Add(a, b, ..) => { dfs(a, order, visited); dfs(b, order, visited); }
-            GVarNode::Tanh(a, ..) | GVarNode::Scale(a, ..) | GVarNode::Gather(a, _, _) => { dfs(a, order, visited); }
+            GVarNode::MatMul(a, b, ..) | GVarNode::Add(a, b, ..) => {
+                dfs(a, order, visited);
+                dfs(b, order, visited);
+            }
+            GVarNode::Tanh(a, ..) | GVarNode::Scale(a, ..) | GVarNode::Gather(a, _, _) => {
+                dfs(a, order, visited);
+            }
         }
     }
     order.push(Rc::clone(v));
 }
 
 /// Download a value to host f64.
-pub fn to_vec(v: &GVar) -> Vec<f64> { gpu_tensor::f32_to_f64(&v.borrow().t.to_vec()) }
+pub fn to_vec(v: &GVar) -> Vec<f64> {
+    gpu_tensor::f32_to_f64(&v.borrow().t.to_vec())
+}
 /// Download a gradient to host f64 (panics if none).
 pub fn grad_to_vec(v: &GVar) -> Vec<f64> {
     let g: Vec<f32> = v.borrow().grad.as_ref().expect("no grad").to_vec();
@@ -198,7 +239,9 @@ pub fn grad_to_vec(v: &GVar) -> Vec<f64> {
 // Add-backward for broadcast: reduce a gradient dc (r×c) to the shape (dr×dc_dim)
 // of an operand, summing over broadcast (repeated) rows/cols on the GPU.
 fn reduce_to(dc: &GpuTensor, dr: usize, dc_dim: usize) -> GpuTensor {
-    if dc.r == dr && dc.c == dc_dim { return gpu_tensor::scale(1.0, dc); }
+    if dc.r == dr && dc.c == dc_dim {
+        return gpu_tensor::scale(1.0, dc);
+    }
     gpu_tensor::reduce_sum(dc, dr, dc_dim)
 }
 
@@ -231,24 +274,53 @@ pub struct AdamG {
 
 impl AdamG {
     pub fn new(lr: f64) -> Self {
-        AdamG { lr, b1: 0.9, b2: 0.999, eps: 1e-8, m: Default::default(), v: Default::default(), t: 0 }
+        AdamG {
+            lr,
+            b1: 0.9,
+            b2: 0.999,
+            eps: 1e-8,
+            m: Default::default(),
+            v: Default::default(),
+            t: 0,
+        }
     }
     pub fn step(&mut self, params: &[GVar]) {
         self.t += 1;
-        let b1 = self.b1 as f32; let b2 = self.b2 as f32; let eps = self.eps as f32;
+        let b1 = self.b1 as f32;
+        let b2 = self.b2 as f32;
+        let eps = self.eps as f32;
         for p in params {
             let id = Rc::as_ptr(p) as usize;
             let (pr, pc, ctxt) = {
                 let b = p.borrow();
-                let gv = match b.grad.as_ref() { Some(g) => g, None => continue }; // 无 grad 参数跳过(如单跳样本不经状态更新层)
+                let gv = match b.grad.as_ref() {
+                    Some(g) => g,
+                    None => continue,
+                }; // 无 grad 参数跳过(如单跳样本不经状态更新层)
                 (gv.r, gv.c, Rc::clone(&b.t.ctx))
             };
             // lazy init device m/v (zeros) per param on first step
-            let m = self.m.entry(id).or_insert_with(|| GpuTensor::zeros(Rc::clone(&ctxt), pr, pc));
-            let v = self.v.entry(id).or_insert_with(|| GpuTensor::zeros(Rc::clone(&ctxt), pr, pc));
+            let m = self
+                .m
+                .entry(id)
+                .or_insert_with(|| GpuTensor::zeros(Rc::clone(&ctxt), pr, pc));
+            let v = self
+                .v
+                .entry(id)
+                .or_insert_with(|| GpuTensor::zeros(Rc::clone(&ctxt), pr, pc));
             let new_t = {
                 let b = p.borrow();
-                gpu_tensor::adam_step(&b.t, b.grad.as_ref().unwrap(), m, v, self.lr as f32, b1, b2, eps, self.t as u32)
+                gpu_tensor::adam_step(
+                    &b.t,
+                    b.grad.as_ref().unwrap(),
+                    m,
+                    v,
+                    self.lr as f32,
+                    b1,
+                    b2,
+                    eps,
+                    self.t as u32,
+                )
             };
             let mut bm = p.borrow_mut();
             let old = std::mem::replace(&mut bm.t, new_t);
@@ -259,12 +331,23 @@ impl AdamG {
 
     // ==== 状态导出/导入 (V1 RTW 恢复续学): m/v 设备驻留, 导出时 to_vec 拉回, 导入时 zeros+回填. ====
     pub fn state(&self, params: &[GVar]) -> (Vec<Vec<f32>>, Vec<Vec<f32>>, u64) {
-        let mut ms = Vec::new(); let mut vs = Vec::new();
+        let mut ms = Vec::new();
+        let mut vs = Vec::new();
         for p in params {
             let id = Rc::as_ptr(p) as usize;
             let n = p.borrow().t.r * p.borrow().t.c;
-            ms.push(self.m.get(&id).map(|m| m.to_vec()).unwrap_or_else(|| vec![0.0f32; n]));
-            vs.push(self.v.get(&id).map(|v| v.to_vec()).unwrap_or_else(|| vec![0.0f32; n]));
+            ms.push(
+                self.m
+                    .get(&id)
+                    .map(|m| m.to_vec())
+                    .unwrap_or_else(|| vec![0.0f32; n]),
+            );
+            vs.push(
+                self.v
+                    .get(&id)
+                    .map(|v| v.to_vec())
+                    .unwrap_or_else(|| vec![0.0f32; n]),
+            );
         }
         (ms, vs, self.t)
     }
@@ -273,11 +356,17 @@ impl AdamG {
         let mut nvs = std::collections::HashMap::new();
         for (i, p) in params.iter().enumerate() {
             let id = Rc::as_ptr(p) as usize;
-            let (r, c, ctx) = { let b = p.borrow(); (b.t.r, b.t.c, Rc::clone(&b.t.ctx)) };
+            let (r, c, ctx) = {
+                let b = p.borrow();
+                (b.t.r, b.t.c, Rc::clone(&b.t.ctx))
+            };
             let n = r * c;
             let mk = |src: &[f32]| {
                 let mut z = vec![0.0f32; n];
-                if !src.is_empty() { let m = src.len().min(n); z[..m].copy_from_slice(&src[..m]); }
+                if !src.is_empty() {
+                    let m = src.len().min(n);
+                    z[..m].copy_from_slice(&src[..m]);
+                }
                 gpu_tensor::GpuTensor::from_data(Rc::clone(&ctx), &z, r, c)
             };
             nms.insert(id, mk(ms.get(i).map(|x| x.as_slice()).unwrap_or(&[])));

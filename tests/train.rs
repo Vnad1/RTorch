@@ -2,7 +2,7 @@
 // A tiny learnable model fit with Adam; verifies the forward→graph→loss→
 // backward→optimizer loop and that Adam state can be saved/restored (RTW
 // checkpoint reload contract).
-use rtorch::autograd::{self, Var, Adam};
+use rtorch::autograd::{self, Adam, Var};
 
 fn set_pred_grad_mse(pred: &Var, target: &[f64]) {
     let mut b = pred.borrow_mut();
@@ -42,11 +42,28 @@ fn adam_trains_a_small_model() {
 
     assert!(losses[0] > 1.0, "initial loss too small: {}", losses[0]);
     let final_loss = losses.last().copied().unwrap();
-    assert!(final_loss < 1e-2, "training did not converge: final loss {}", final_loss);
-    assert!(final_loss < losses[0] * 0.01, "loss did not fall enough: {} -> {}", losses[0], final_loss);
+    assert!(
+        final_loss < 1e-2,
+        "training did not converge: final loss {}",
+        final_loss
+    );
+    assert!(
+        final_loss < losses[0] * 0.01,
+        "loss did not fall enough: {} -> {}",
+        losses[0],
+        final_loss
+    );
     // W should approach ~2, b ~0 (2x + 0).
-    assert!((w.borrow().data[0] - 2.0).abs() < 0.2, "W={} expected ~2", w.borrow().data[0]);
-    assert!(b.borrow().data[0].abs() < 0.2, "b={} expected ~0", b.borrow().data[0]);
+    assert!(
+        (w.borrow().data[0] - 2.0).abs() < 0.2,
+        "W={} expected ~2",
+        w.borrow().data[0]
+    );
+    assert!(
+        b.borrow().data[0].abs() < 0.2,
+        "b={} expected ~0",
+        b.borrow().data[0]
+    );
 }
 
 #[test]
@@ -68,11 +85,16 @@ fn adam_state_roundtrip_continues() {
         mse(&pred.borrow().data, &target)
     };
 
-    for _ in 0..200 { step(&params, &mut opt, &w, &b); }
-    let before = mse(&{
-        let pred = autograd::add(&autograd::matmul(&x, &w), &b);
-        pred.borrow().data.clone()
-    }, &target);
+    for _ in 0..200 {
+        step(&params, &mut opt, &w, &b);
+    }
+    let before = mse(
+        &{
+            let pred = autograd::add(&autograd::matmul(&x, &w), &b);
+            pred.borrow().data.clone()
+        },
+        &target,
+    );
 
     // Save optimizer state (m/v/t) and weights, then restore into a fresh optimizer.
     let (ms, vs, t) = opt.state(&params);
@@ -85,11 +107,21 @@ fn adam_state_roundtrip_continues() {
     let mut opt2 = Adam::new(0.05);
     opt2.load_state(&params2, &ms, &vs, t);
 
-    for _ in 0..20 { step(&params2, &mut opt2, &w2, &b2); }
-    let after = mse(&{
-        let pred = autograd::add(&autograd::matmul(&x, &w2), &b2);
-        pred.borrow().data.clone()
-    }, &target);
+    for _ in 0..20 {
+        step(&params2, &mut opt2, &w2, &b2);
+    }
+    let after = mse(
+        &{
+            let pred = autograd::add(&autograd::matmul(&x, &w2), &b2);
+            pred.borrow().data.clone()
+        },
+        &target,
+    );
 
-    assert!(after < before, "checkpoint reload did not continue improving: {} -> {}", before, after);
+    assert!(
+        after < before,
+        "checkpoint reload did not continue improving: {} -> {}",
+        before,
+        after
+    );
 }

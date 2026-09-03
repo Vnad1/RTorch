@@ -12,12 +12,19 @@ pub enum Device {
 
 impl Device {
     pub fn name(&self) -> &'static str {
-        match self { Device::Cpu => "cpu", Device::Gpu => "gpu" }
+        match self {
+            Device::Cpu => "cpu",
+            Device::Gpu => "gpu",
+        }
     }
     /// Parse a --device string (case-insensitive). Unknown -> None.
     pub fn from_cli(s: &str) -> Option<Device> {
-        if s.eq_ignore_ascii_case("cpu") { Some(Device::Cpu) }
-        else if s.eq_ignore_ascii_case("gpu") { Some(Device::Gpu) }
-        else { None }
+        if s.eq_ignore_ascii_case("cpu") {
+            Some(Device::Cpu)
+        } else if s.eq_ignore_ascii_case("gpu") {
+            Some(Device::Gpu)
+        } else {
+            None
+        }
     }
 }

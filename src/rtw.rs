@@ -19,15 +19,15 @@ use std::io::{self, Read, Write};
 
 pub const DTYPE_FP32: u8 = 0;
 pub const DTYPE_FP16: u8 = 1;
-pub const DTYPE_FP8: u8 = 2;   // E4M3
-pub const DTYPE_FP4: u8 = 3;   // E2M1
+pub const DTYPE_FP8: u8 = 2; // E4M3
+pub const DTYPE_FP4: u8 = 3; // E2M1
 pub const DTYPE_INT32: u8 = 4;
 pub const DTYPE_BYTES: u8 = 5;
 
 pub const KIND_RESULT: u8 = 0;
 pub const KIND_KERNEL: u8 = 1;
-pub const KIND_MODEL: u8 = 2;   // 冻结权重(权重+结构元数据)
-pub const KIND_MEMORY: u8 = 3;  // Striker 记忆 state(Frag 列表序列化, 动态增长)
+pub const KIND_MODEL: u8 = 2; // 冻结权重(权重+结构元数据)
+pub const KIND_MEMORY: u8 = 3; // Striker 记忆 state(Frag 列表序列化, 动态增长)
 
 const FLAG_HAS_KERNEL: u8 = 0x01;
 
@@ -67,21 +67,48 @@ impl Rtw {
     }
 }
 
-fn put_u16(w: &mut Vec<u8>, v: u16) { w.extend_from_slice(&v.to_le_bytes()); }
-fn put_u32(w: &mut Vec<u8>, v: u32) { w.extend_from_slice(&v.to_le_bytes()); }
-fn put_u64(w: &mut Vec<u8>, v: u64) { w.extend_from_slice(&v.to_le_bytes()); }
+fn put_u16(w: &mut Vec<u8>, v: u16) {
+    w.extend_from_slice(&v.to_le_bytes());
+}
+fn put_u32(w: &mut Vec<u8>, v: u32) {
+    w.extend_from_slice(&v.to_le_bytes());
+}
+fn put_u64(w: &mut Vec<u8>, v: u64) {
+    w.extend_from_slice(&v.to_le_bytes());
+}
 
 fn rd_u16(r: &mut &[u8]) -> io::Result<u16> {
-    if r.len() < 2 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short u16")); }
-    let b: [u8; 2] = [r[0], r[1]]; *r = &r[2..]; Ok(u16::from_le_bytes(b))
+    if r.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short u16",
+        ));
+    }
+    let b: [u8; 2] = [r[0], r[1]];
+    *r = &r[2..];
+    Ok(u16::from_le_bytes(b))
 }
 fn rd_u32(r: &mut &[u8]) -> io::Result<u32> {
-    if r.len() < 4 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short u32")); }
-    let b: [u8; 4] = [r[0], r[1], r[2], r[3]]; *r = &r[4..]; Ok(u32::from_le_bytes(b))
+    if r.len() < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short u32",
+        ));
+    }
+    let b: [u8; 4] = [r[0], r[1], r[2], r[3]];
+    *r = &r[4..];
+    Ok(u32::from_le_bytes(b))
 }
 fn rd_u64(r: &mut &[u8]) -> io::Result<u64> {
-    if r.len() < 8 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short u64")); }
-    let b: [u8; 8] = [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]; *r = &r[8..]; Ok(u64::from_le_bytes(b))
+    if r.len() < 8 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short u64",
+        ));
+    }
+    let b: [u8; 8] = [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]];
+    *r = &r[8..];
+    Ok(u64::from_le_bytes(b))
 }
 
 /// Serialize an Rtw container to bytes.
@@ -98,7 +125,9 @@ pub fn encode(rtw: &Rtw) -> Vec<u8> {
     put_u64(&mut w, rtw.data.len() as u64);
     w.extend_from_slice(&rtw.data);
     let mut flags = 0u8;
-    if rtw.kernel.is_some() { flags |= FLAG_HAS_KERNEL; }
+    if rtw.kernel.is_some() {
+        flags |= FLAG_HAS_KERNEL;
+    }
     w.push(flags);
     if let Some(k) = &rtw.kernel {
         put_u64(&mut w, k.len() as u64);
@@ -111,36 +140,66 @@ pub fn encode(rtw: &Rtw) -> Vec<u8> {
 /// Parse an Rtw container from bytes, validating magic and trimming trailing.
 pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     if bytes.len() < 12 || &bytes[0..4] != b"RTW1" {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "rtw: bad or missing magic"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "rtw: bad or missing magic",
+        ));
     }
     let mut r: &[u8] = &bytes[4..];
     let version = rd_u16(&mut r)?;
     if version != 1 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("rtw: unsupported version {version}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("rtw: unsupported version {version}"),
+        ));
     }
     if r.len() < 2 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: missing kind/dtype"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: missing kind/dtype",
+        ));
     }
-    let kind = r[0]; r = &r[1..];
-    let dtype = r[0]; r = &r[1..];
+    let kind = r[0];
+    r = &r[1..];
+    let dtype = r[0];
+    r = &r[1..];
     let rank = rd_u32(&mut r)? as usize;
-    if r.len() < rank * 4 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short shape")); }
+    if r.len() < rank * 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short shape",
+        ));
+    }
     let mut shape = Vec::with_capacity(rank);
     for _ in 0..rank {
         shape.push(rd_u32(&mut r)?);
     }
     let data_len = rd_u64(&mut r)? as usize;
-    if r.len() < data_len { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short data")); }
+    if r.len() < data_len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short data",
+        ));
+    }
     let data = r[..data_len].to_vec();
     r = &r[data_len..];
     if r.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: missing flags"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: missing flags",
+        ));
     }
-    let flags = r[0]; r = &r[1..];
+    let flags = r[0];
+    r = &r[1..];
     let mut kernel = None;
     if flags & FLAG_HAS_KERNEL != 0 {
         let klen = rd_u64(&mut r)? as usize;
-        if r.len() < klen { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short kernel")); }
+        if r.len() < klen {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "rtw: short kernel",
+            ));
+        }
         kernel = Some(r[..klen].to_vec());
         r = &r[klen..];
     }
@@ -148,7 +207,13 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     if r.len() >= 5 && &r[..5] == b"RTEND" {
         // ok
     }
-    Ok(Rtw { kind, dtype, shape, data, kernel })
+    Ok(Rtw {
+        kind,
+        dtype,
+        shape,
+        data,
+        kernel,
+    })
 }
 
 /// Read a whole file into bytes.
@@ -207,22 +272,47 @@ pub struct Memory {
     pub fragments: Vec<MemoryFragment>,
 }
 
-fn put_bytes(w: &mut Vec<u8>, b: &[u8]) { put_u32(w, b.len() as u32); w.extend_from_slice(b); }
+fn put_bytes(w: &mut Vec<u8>, b: &[u8]) {
+    put_u32(w, b.len() as u32);
+    w.extend_from_slice(b);
+}
 fn rd_bytes(r: &mut &[u8]) -> io::Result<Vec<u8>> {
     let n = rd_u32(r)? as usize;
-    if r.len() < n { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short bytes")); }
-    let b = r[..n].to_vec(); *r = &r[n..]; Ok(b)
+    if r.len() < n {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short bytes",
+        ));
+    }
+    let b = r[..n].to_vec();
+    *r = &r[n..];
+    Ok(b)
 }
-fn put_str(w: &mut Vec<u8>, s: &str) { put_bytes(w, s.as_bytes()); }
+fn put_str(w: &mut Vec<u8>, s: &str) {
+    put_bytes(w, s.as_bytes());
+}
 fn rd_str(r: &mut &[u8]) -> io::Result<String> {
     let b = rd_bytes(r)?;
     String::from_utf8(b).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rtw: bad utf8"))
 }
-fn put_f32s(w: &mut Vec<u8>, v: &[f32]) { let mut b = Vec::with_capacity(v.len() * 4); for x in v { b.extend_from_slice(&x.to_le_bytes()); } put_bytes(w, &b); }
+fn put_f32s(w: &mut Vec<u8>, v: &[f32]) {
+    let mut b = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    put_bytes(w, &b);
+}
 fn rd_f32s(r: &mut &[u8]) -> io::Result<Vec<f32>> {
     let b = rd_bytes(r)?;
-    if b.len() % 4 != 0 { return Err(io::Error::new(io::ErrorKind::InvalidData, "rtw: bad f32 block")); }
-    Ok(b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    if b.len() % 4 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "rtw: bad f32 block",
+        ));
+    }
+    Ok(b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect())
 }
 
 /// Encode a Model into a self-describing byte payload (for RTW kind=MODEL).
@@ -234,7 +324,9 @@ pub fn encode_model(m: &Model) -> Vec<u8> {
     for p in &m.params {
         put_str(&mut w, &p.name);
         put_u32(&mut w, p.shape.len() as u32);
-        for &d in &p.shape { put_u32(&mut w, d); }
+        for &d in &p.shape {
+            put_u32(&mut w, d);
+        }
         w.push(p.dtype);
         put_f32s(&mut w, &p.data);
     }
@@ -244,7 +336,9 @@ pub fn encode_model(m: &Model) -> Vec<u8> {
             put_u64(&mut w, o.t);
             for list in [&o.m, &o.v] {
                 put_u32(&mut w, list.len() as u32);
-                for t in list { put_f32s(&mut w, t); }
+                for t in list {
+                    put_f32s(&mut w, t);
+                }
             }
         }
         None => w.push(0),
@@ -262,22 +356,48 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     for _ in 0..nparams {
         let pname = rd_str(&mut r)?;
         let rank = rd_u32(&mut r)? as usize;
-        if r.len() < rank * 4 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short shape")); }
+        if r.len() < rank * 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "rtw: short shape",
+            ));
+        }
         let mut shape = Vec::with_capacity(rank);
-        for _ in 0..rank { shape.push(rd_u32(&mut r)?); }
-        if r.is_empty() { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short dtype")); }
-        let dtype = r[0]; r = &r[1..];
+        for _ in 0..rank {
+            shape.push(rd_u32(&mut r)?);
+        }
+        if r.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "rtw: short dtype",
+            ));
+        }
+        let dtype = r[0];
+        r = &r[1..];
         let data = rd_f32s(&mut r)?;
-        params.push(NamedTensor { name: pname, shape, dtype, data });
+        params.push(NamedTensor {
+            name: pname,
+            shape,
+            dtype,
+            data,
+        });
     }
-    if r.is_empty() { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short opt flag")); }
-    let has_opt = r[0]; r = &r[1..];
+    if r.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: short opt flag",
+        ));
+    }
+    let has_opt = r[0];
+    r = &r[1..];
     let opt = if has_opt != 0 {
         let t = rd_u64(&mut r)?;
         let mut read_lists = |r: &mut &[u8]| -> io::Result<Vec<Vec<f32>>> {
             let n = rd_u32(r)? as usize;
             let mut out = Vec::with_capacity(n);
-            for _ in 0..n { out.push(rd_f32s(r)?); }
+            for _ in 0..n {
+                out.push(rd_f32s(r)?);
+            }
             Ok(out)
         };
         let m = read_lists(&mut r)?;
@@ -286,7 +406,12 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     } else {
         None
     };
-    Ok(Model { name, version, params, opt })
+    Ok(Model {
+        name,
+        version,
+        params,
+        opt,
+    })
 }
 
 /// Encode a Memory into a self-describing byte payload (for RTW kind=MEMORY).
@@ -309,21 +434,42 @@ pub fn decode_memory(bytes: &[u8]) -> io::Result<Memory> {
     for _ in 0..n {
         let id = rd_u64(&mut r)?;
         let state = rd_f32s(&mut r)?;
-        if r.len() < 4 { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short strength")); }
+        if r.len() < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "rtw: short strength",
+            ));
+        }
         let s: [u8; 4] = [r[0], r[1], r[2], r[3]];
         let strength = f32::from_le_bytes(s);
         r = &r[4..];
-        frags.push(MemoryFragment { id, state, strength });
+        frags.push(MemoryFragment {
+            id,
+            state,
+            strength,
+        });
     }
     Ok(Memory { fragments: frags })
 }
 
 /// Wrap a Model into a full RTW container (kind=MODEL).
 pub fn model_rtw(m: &Model) -> Rtw {
-    Rtw { kind: KIND_MODEL, dtype: DTYPE_BYTES, shape: vec![m.params.len() as u32], data: encode_model(m), kernel: None }
+    Rtw {
+        kind: KIND_MODEL,
+        dtype: DTYPE_BYTES,
+        shape: vec![m.params.len() as u32],
+        data: encode_model(m),
+        kernel: None,
+    }
 }
 
 /// Wrap a Memory into a full RTW container (kind=MEMORY).
 pub fn memory_rtw(m: &Memory) -> Rtw {
-    Rtw { kind: KIND_MEMORY, dtype: DTYPE_BYTES, shape: vec![m.fragments.len() as u32], data: encode_memory(m), kernel: None }
+    Rtw {
+        kind: KIND_MEMORY,
+        dtype: DTYPE_BYTES,
+        shape: vec![m.fragments.len() as u32],
+        data: encode_memory(m),
+        kernel: None,
+    }
 }

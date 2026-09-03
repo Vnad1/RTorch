@@ -11,12 +11,19 @@ use crate::tensor::{self, DType, Tensor};
 use std::rc::Rc;
 
 fn gpu_ctx() -> Result<Rc<GpuContext>, String> {
-    GpuContext::new().map(Rc::new).map_err(|e| format!("vulkan: {e}"))
+    GpuContext::new()
+        .map(Rc::new)
+        .map_err(|e| format!("vulkan: {e}"))
 }
 
 fn gpu_from_tensor(ctx: &Rc<GpuContext>, t: &Tensor) -> Result<gpu_tensor::GpuTensor, String> {
     let data: Vec<f32> = t.data.iter().map(|&x| x as f32).collect();
-    Ok(gpu_tensor::GpuTensor::from_data(Rc::clone(ctx), &data, t.r, t.c))
+    Ok(gpu_tensor::GpuTensor::from_data(
+        Rc::clone(ctx),
+        &data,
+        t.r,
+        t.c,
+    ))
 }
 
 fn gpu_to_tensor(ctx: &Rc<GpuContext>, g: &gpu_tensor::GpuTensor) -> Result<Tensor, String> {

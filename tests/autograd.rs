@@ -4,7 +4,9 @@ use rtorch::autograd::{self, Var};
 
 fn set_all_grad(v: &Var, val: f64) {
     let mut b = v.borrow_mut();
-    for g in &mut b.grad { *g = val; }
+    for g in &mut b.grad {
+        *g = val;
+    }
 }
 
 #[test]
@@ -21,8 +23,20 @@ fn matmul_backward_grads() {
     let dA = [11.0, 15.0, 11.0, 15.0];
     let dB = [4.0, 4.0, 6.0, 6.0];
     for i in 0..4 {
-        assert!((a.borrow().grad[i] - dA[i]).abs() < 1e-12, "dA[{}]={} expected {}", i, a.borrow().grad[i], dA[i]);
-        assert!((b.borrow().grad[i] - dB[i]).abs() < 1e-12, "dB[{}]={} expected {}", i, b.borrow().grad[i], dB[i]);
+        assert!(
+            (a.borrow().grad[i] - dA[i]).abs() < 1e-12,
+            "dA[{}]={} expected {}",
+            i,
+            a.borrow().grad[i],
+            dA[i]
+        );
+        assert!(
+            (b.borrow().grad[i] - dB[i]).abs() < 1e-12,
+            "dB[{}]={} expected {}",
+            i,
+            b.borrow().grad[i],
+            dB[i]
+        );
     }
 }
 
@@ -35,7 +49,13 @@ fn tanh_backward_uses_output() {
     autograd::backward(&y);
     for i in 0..4 {
         let expected = 1.0 - y.borrow().data[i] * y.borrow().data[i];
-        assert!((x.borrow().grad[i] - expected).abs() < 1e-12, "grad[{}]={} expected {}", i, x.borrow().grad[i], expected);
+        assert!(
+            (x.borrow().grad[i] - expected).abs() < 1e-12,
+            "grad[{}]={} expected {}",
+            i,
+            x.borrow().grad[i],
+            expected
+        );
     }
 }
 
@@ -43,12 +63,12 @@ fn tanh_backward_uses_output() {
 fn shared_param_two_branches_accumulates() {
     // shared backbone p feeds two heads (two losses). Backward over the combined
     // loss must accumulate p's gradient from BOTH branches.
-    let p = autograd::from_data(vec![1.0, 0.5, -0.5, 2.0], 2, 2);          // shared param
-    let w1 = autograd::from_data(vec![1.0, 0.0, 0.0, 1.0], 2, 2);          // head A
-    let w2 = autograd::from_data(vec![0.0, 1.0, 1.0, 0.0], 2, 2);          // head B
+    let p = autograd::from_data(vec![1.0, 0.5, -0.5, 2.0], 2, 2); // shared param
+    let w1 = autograd::from_data(vec![1.0, 0.0, 0.0, 1.0], 2, 2); // head A
+    let w2 = autograd::from_data(vec![0.0, 1.0, 1.0, 0.0], 2, 2); // head B
     let a = autograd::matmul(&p, &w1);
     let b = autograd::matmul(&p, &w2);
-    let loss = autograd::add(&a, &b);                                      // combined loss
+    let loss = autograd::add(&a, &b); // combined loss
     set_all_grad(&loss, 1.0);
     autograd::backward(&loss);
 
@@ -56,7 +76,12 @@ fn shared_param_two_branches_accumulates() {
     // W1 = I => rowsum(W1)=[1,1]; W2 = [[0,1],[1,0]] => rowsum(W2)=[1,1].
     // So expected dL/d(p[i,k]) = 1 + 1 = 2 for every element.
     for i in 0..4 {
-        assert!((p.borrow().grad[i] - 2.0).abs() < 1e-12, "p.grad[{}]={} expected 2", i, p.borrow().grad[i]);
+        assert!(
+            (p.borrow().grad[i] - 2.0).abs() < 1e-12,
+            "p.grad[{}]={} expected 2",
+            i,
+            p.borrow().grad[i]
+        );
     }
 }
 

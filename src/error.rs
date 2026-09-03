@@ -53,13 +53,19 @@ impl std::error::Error for RtorchError {}
 pub type Result<T> = std::result::Result<T, RtorchError>;
 
 impl From<&str> for RtorchError {
-    fn from(s: &str) -> Self { RtorchError::Io(s.to_string()) }
+    fn from(s: &str) -> Self {
+        RtorchError::Io(s.to_string())
+    }
 }
 impl From<String> for RtorchError {
-    fn from(s: String) -> Self { RtorchError::Io(s) }
+    fn from(s: String) -> Self {
+        RtorchError::Io(s)
+    }
 }
 impl From<std::io::Error> for RtorchError {
-    fn from(e: std::io::Error) -> Self { RtorchError::Io(e.to_string()) }
+    fn from(e: std::io::Error) -> Self {
+        RtorchError::Io(e.to_string())
+    }
 }
 
 // error.rs is compiled into both the lib (public) and the rtorch bin (private
@@ -67,26 +73,51 @@ impl From<std::io::Error> for RtorchError {
 // code. These are public API factories; keep them.
 #[allow(dead_code)]
 impl RtorchError {
-    pub fn compile(m: impl Into<String>) -> Self { RtorchError::CompileError(m.into()) }
-    pub fn load(m: impl Into<String>) -> Self { RtorchError::LoadError(m.into()) }
-    pub fn vulkan(m: impl Into<String>) -> Self { RtorchError::VulkanError(m.into()) }
-    pub fn kernel(m: impl Into<String>) -> Self { RtorchError::KernelError(m.into()) }
-    pub fn tensor(m: impl Into<String>) -> Self { RtorchError::TensorError(m.into()) }
-    pub fn shape(m: impl Into<String>) -> Self { RtorchError::ShapeError(m.into()) }
-    pub fn dtype(m: impl Into<String>) -> Self { RtorchError::DTypeError(m.into()) }
-    pub fn model(m: impl Into<String>) -> Self { RtorchError::ModelError(m.into()) }
-    pub fn rtw(m: impl Into<String>) -> Self { RtorchError::RTWError(m.into()) }
-    pub fn io(m: impl Into<String>) -> Self { RtorchError::Io(m.into()) }
+    pub fn compile(m: impl Into<String>) -> Self {
+        RtorchError::CompileError(m.into())
+    }
+    pub fn load(m: impl Into<String>) -> Self {
+        RtorchError::LoadError(m.into())
+    }
+    pub fn vulkan(m: impl Into<String>) -> Self {
+        RtorchError::VulkanError(m.into())
+    }
+    pub fn kernel(m: impl Into<String>) -> Self {
+        RtorchError::KernelError(m.into())
+    }
+    pub fn tensor(m: impl Into<String>) -> Self {
+        RtorchError::TensorError(m.into())
+    }
+    pub fn shape(m: impl Into<String>) -> Self {
+        RtorchError::ShapeError(m.into())
+    }
+    pub fn dtype(m: impl Into<String>) -> Self {
+        RtorchError::DTypeError(m.into())
+    }
+    pub fn model(m: impl Into<String>) -> Self {
+        RtorchError::ModelError(m.into())
+    }
+    pub fn rtw(m: impl Into<String>) -> Self {
+        RtorchError::RTWError(m.into())
+    }
+    pub fn io(m: impl Into<String>) -> Self {
+        RtorchError::Io(m.into())
+    }
 
     /// Stable exit code for a CLI invocation: 0 handled by caller; 1 = runtime
     /// error; 2 = usage/argument error.
     pub fn exit_code(&self) -> i32 {
         match self {
-            RtorchError::CompileError(_) | RtorchError::LoadError(_)
-            | RtorchError::VulkanError(_) | RtorchError::KernelError(_)
-            | RtorchError::TensorError(_) | RtorchError::ShapeError(_)
-            | RtorchError::DTypeError(_) | RtorchError::ModelError(_)
-            | RtorchError::RTWError(_) | RtorchError::Io(_) => 1,
+            RtorchError::CompileError(_)
+            | RtorchError::LoadError(_)
+            | RtorchError::VulkanError(_)
+            | RtorchError::KernelError(_)
+            | RtorchError::TensorError(_)
+            | RtorchError::ShapeError(_)
+            | RtorchError::DTypeError(_)
+            | RtorchError::ModelError(_)
+            | RtorchError::RTWError(_)
+            | RtorchError::Io(_) => 1,
         }
     }
 }

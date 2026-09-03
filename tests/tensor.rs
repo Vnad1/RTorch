@@ -11,7 +11,13 @@ fn matmul_2x2() {
     assert_eq!(c.c, 2);
     let expect = [19.0, 22.0, 43.0, 50.0];
     for (i, e) in expect.iter().enumerate() {
-        assert!((c.data[i] - e).abs() < 1e-12, "matmul[{}]={} expected {}", i, c.data[i], e);
+        assert!(
+            (c.data[i] - e).abs() < 1e-12,
+            "matmul[{}]={} expected {}",
+            i,
+            c.data[i],
+            e
+        );
     }
 }
 

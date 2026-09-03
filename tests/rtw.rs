@@ -1,12 +1,20 @@
 // RTW (.rtw) container encode/decode roundtrip (rtorch::rtw).
 use rtorch::rtw;
 
-fn f32_bytes(v: &[f32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
+fn f32_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
 
 #[test]
 fn result_fp32_roundtrip() {
     let data = f32_bytes(&[1.0, -2.5, 3.75, 0.0, 1e-6, 42.0]);
-    let rtw = rtw::Rtw { kind: rtw::KIND_RESULT, dtype: rtw::DTYPE_FP32, shape: vec![2, 3], data, kernel: None };
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![2, 3],
+        data,
+        kernel: None,
+    };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
     assert_eq!(dec.kind, rtw::KIND_RESULT);
@@ -20,7 +28,13 @@ fn result_fp32_roundtrip() {
 #[test]
 fn kernel_roundtrip_keeps_source() {
     let src = b"unsigned long long rtorch_output_size(...){...}".to_vec();
-    let rtw = rtw::Rtw { kind: rtw::KIND_KERNEL, dtype: rtw::DTYPE_BYTES, shape: vec![], data: vec![], kernel: Some(src.clone()) };
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_KERNEL,
+        dtype: rtw::DTYPE_BYTES,
+        shape: vec![],
+        data: vec![],
+        kernel: Some(src.clone()),
+    };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
     assert_eq!(dec.kind, rtw::KIND_KERNEL);
@@ -30,7 +44,13 @@ fn kernel_roundtrip_keeps_source() {
 #[test]
 fn model_kind_roundtrip() {
     let data = f32_bytes(&[0.1, 0.2, 0.3, 0.4]);
-    let rtw = rtw::Rtw { kind: rtw::KIND_MODEL, dtype: rtw::DTYPE_FP32, shape: vec![4], data, kernel: None };
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_MODEL,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![4],
+        data,
+        kernel: None,
+    };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
     assert_eq!(dec.kind, rtw::KIND_MODEL);
@@ -56,7 +76,13 @@ fn rejects_bad_magic() {
 #[test]
 fn rejects_truncated() {
     let data = f32_bytes(&[1.0, 2.0]);
-    let rtw = rtw::Rtw { kind: rtw::KIND_RESULT, dtype: rtw::DTYPE_FP32, shape: vec![2], data, kernel: None };
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![2],
+        data,
+        kernel: None,
+    };
     let bytes = rtw::encode(&rtw);
     // Truncate deep into the payload region: data_len is already read, but the
     // declared data region is now short -> decode returns an error, not a panic.
@@ -74,8 +100,18 @@ fn model_roundtrip_params_and_opt() {
         name: "test-net".into(),
         version: 3,
         params: vec![
-            rtw::NamedTensor { name: "W".into(), shape: vec![2, 3], dtype: rtw::DTYPE_FP32, data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0] },
-            rtw::NamedTensor { name: "b".into(), shape: vec![3], dtype: rtw::DTYPE_FP32, data: vec![0.1, 0.2, 0.3] },
+            rtw::NamedTensor {
+                name: "W".into(),
+                shape: vec![2, 3],
+                dtype: rtw::DTYPE_FP32,
+                data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            },
+            rtw::NamedTensor {
+                name: "b".into(),
+                shape: vec![3],
+                dtype: rtw::DTYPE_FP32,
+                data: vec![0.1, 0.2, 0.3],
+            },
         ],
         opt: Some(rtw::OptState {
             m: vec![vec![1.0, 2.0], vec![3.0]],
@@ -101,8 +137,14 @@ fn model_roundtrip_params_and_opt() {
 #[test]
 fn model_in_rtw_container_roundtrips() {
     let m = rtw::Model {
-        name: "checkpoint".into(), version: 1,
-        params: vec![rtw::NamedTensor { name: "A".into(), shape: vec![2, 2], dtype: rtw::DTYPE_FP32, data: vec![1.0, 0.0, 0.0, 1.0] }],
+        name: "checkpoint".into(),
+        version: 1,
+        params: vec![rtw::NamedTensor {
+            name: "A".into(),
+            shape: vec![2, 2],
+            dtype: rtw::DTYPE_FP32,
+            data: vec![1.0, 0.0, 0.0, 1.0],
+        }],
         opt: None,
     };
     let rtw = rtw::model_rtw(&m);
@@ -119,8 +161,16 @@ fn model_in_rtw_container_roundtrips() {
 fn memory_roundtrip_fragments() {
     let mem = rtw::Memory {
         fragments: vec![
-            rtw::MemoryFragment { id: 7, state: vec![0.1, 0.2, 0.3], strength: 0.9 },
-            rtw::MemoryFragment { id: 9, state: vec![-1.0, 2.5], strength: 0.4 },
+            rtw::MemoryFragment {
+                id: 7,
+                state: vec![0.1, 0.2, 0.3],
+                strength: 0.9,
+            },
+            rtw::MemoryFragment {
+                id: 9,
+                state: vec![-1.0, 2.5],
+                strength: 0.4,
+            },
         ],
     };
     let bytes = rtw::encode_memory(&mem);

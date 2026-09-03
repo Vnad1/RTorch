@@ -4,7 +4,13 @@ use rtorch::gpu_tensor::{self, GpuContext, GpuTensor};
 use std::rc::Rc;
 
 fn main() {
-    let ctx = match GpuContext::new() { Ok(c) => Rc::new(c), Err(e) => { println!("GPU ctx 失败: {e}"); return; } };
+    let ctx = match GpuContext::new() {
+        Ok(c) => Rc::new(c),
+        Err(e) => {
+            println!("GPU ctx 失败: {e}");
+            return;
+        }
+    };
     println!("[batch-check] === 逐op vs batch 结果一致性 ===\n");
 
     let (r, k, c) = (16usize, 32usize, 24usize);
@@ -39,9 +45,19 @@ fn main() {
     ctx.end_batch();
     let batchy = m2.to_vec();
 
-    let mut maxe = 0.0f32; let mut w = 0usize;
-    for i in 0..base.len() { let d = (base[i] - batchy[i]).abs(); if d > maxe { maxe = d; w = i; } }
-    println!("链 matmul→add→tanh→matmul: batch vs 逐op max|Δ| = {maxe:.3e}  => {}", if maxe < 1e-4 { "PASS" } else { "FAIL" });
+    let mut maxe = 0.0f32;
+    let mut w = 0usize;
+    for i in 0..base.len() {
+        let d = (base[i] - batchy[i]).abs();
+        if d > maxe {
+            maxe = d;
+            w = i;
+        }
+    }
+    println!(
+        "链 matmul→add→tanh→matmul: batch vs 逐op max|Δ| = {maxe:.3e}  => {}",
+        if maxe < 1e-4 { "PASS" } else { "FAIL" }
+    );
     println!("  base[{}]={} batch[{}]={}", w, base[w], w, batchy[w]);
     println!("\n[batch-check] DONE");
 }

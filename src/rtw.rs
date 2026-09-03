@@ -118,6 +118,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     if version != 1 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("rtw: unsupported version {version}")));
     }
+    if r.len() < 2 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: missing kind/dtype"));
+    }
     let kind = r[0]; r = &r[1..];
     let dtype = r[0]; r = &r[1..];
     let rank = rd_u32(&mut r)? as usize;
@@ -130,6 +133,9 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     if r.len() < data_len { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: short data")); }
     let data = r[..data_len].to_vec();
     r = &r[data_len..];
+    if r.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: missing flags"));
+    }
     let flags = r[0]; r = &r[1..];
     let mut kernel = None;
     if flags & FLAG_HAS_KERNEL != 0 {

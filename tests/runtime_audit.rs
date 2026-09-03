@@ -184,3 +184,37 @@ fn boundary_inputs() {
     let c = tensor::matmul(&a, &b);
     assert!((c.data[0] - 12.0).abs() < 1e-12);
 }
+
+#[test]
+fn autograd_backward_matches_numerical_gradient() {
+    // Central-difference check of the analytic backward for
+    // loss = sum(tanh(x·W + b)): catches silent-wrong in backprop.
+    use rtorch::autograd::{self, Adam};
+    let x = autograd::from_data(vec![0.3, -0.7, 1.1, 0.2, -0.5, 0.9], 3, 2);
+    let w = autograd::from_data(vec![0.1, 0.2, 0.3, 0.4, -0.2, 0.5, 0.7, -0.1], 2, 4);
+    let b = autograd::from_data(vec![0.05, -0.02, 0.01, 0.1], 1, 4);
+
+    let fwd = || -> f64 {
+        let h = autograd::tanh(&autograd::add(&autograd::matmul(&x, &w), &b));
+        h.borrow().data.iter().sum::<f64>()
+    };
+    let pred = autograd::tanh(&autograd::add(&autograd::matmul(&x, &w), &b));
+    let n = pred.borrow().data.len();
+    pred.borrow_mut().grad = vec![1.0; n];
+    autograd::backward(&pred);
+
+    let wdata = w.borrow().data.clone();
+    let eps = 1e-5;
+    for k in 0..wdata.len() {
+        let ga = w.borrow().grad[k];
+        w.borrow_mut().data[k] = wdata[k] + eps;
+        let fp = fwd();
+        w.borrow_mut().data[k] = wdata[k] - eps;
+        let fm = fwd();
+        w.borrow_mut().data[k] = wdata[k];
+        let gn = (fp - fm) / (2.0 * eps);
+        assert!((ga - gn).abs() < 1e-4, "w[{}] analytic={} numeric={}", k, ga, gn);
+    }
+    let mut opt = Adam::new(0.01);
+    opt.step(&[w.clone()]);
+}

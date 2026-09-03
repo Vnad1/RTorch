@@ -20,6 +20,7 @@ use std::os::windows::ffi::OsStrExt;
 mod vk;
 mod rtw;
 mod loc;
+mod error;
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -92,7 +93,7 @@ fn main() {
         Ok(()) => {}
         Err(e) => {
             eprintln!("rtorch: {e}");
-            std::process::exit(1);
+            std::process::exit(e.exit_code());
         }
     }
 }
@@ -221,9 +222,9 @@ fn find_compiler() -> Option<PathBuf> {
     None
 }
 
-fn run(opts: &Opts, device: i32) -> std::io::Result<()> {
+fn run(opts: &Opts, device: i32) -> error::Result<()> {
     let compiler = find_compiler().ok_or_else(|| {
-        std::io::Error::other("no C++ compiler found (need MinGW g++)")
+        error::RtorchError::compile("no C++ compiler found (need MinGW g++; set RTORCH_GXX)")
     })?;
 
     // Ensure compiler runtime DLLs are on PATH before we LoadLibrary later.
@@ -238,7 +239,7 @@ fn run(opts: &Opts, device: i32) -> std::io::Result<()> {
 
     let formula_path = Path::new(&opts.formula);
     if !formula_path.exists() {
-        return Err(std::io::Error::other(format!("formula not found: {}", opts.formula)));
+        return Err(error::RtorchError::io(format!("formula not found: {}", opts.formula)));
     }
 
     let out_dll = env::current_dir().ok().unwrap_or_else(|| env::temp_dir())
@@ -270,7 +271,7 @@ fn run(opts: &Opts, device: i32) -> std::io::Result<()> {
     let st = cmd.status()?;
     if !st.success() {
         let _ = std::fs::remove_file(&out_dll);
-        return Err(std::io::Error::other("compilation of formula failed (see g++ output above)"));
+        return Err(error::RtorchError::compile("compilation of formula failed (see g++ output above)"));
     }
 
     // Read inputs.
@@ -297,7 +298,7 @@ use std::io::Write;
 
 // Tries the unified protocol (rtorch_output_size + rtorch_compute); falls back
 // to legacy rtorch_main if the formula does not export the protocol functions.
-fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> std::io::Result<Vec<u8>> {
+fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> error::Result<Vec<u8>> {
     let handle = load_dll(dll)?;
 
     let out_size = load_symbol::<OutputSizeFn>(handle, "rtorch_output_size");
@@ -331,7 +332,7 @@ fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> std::io::Resu
         eprintln!("[rtorch] compute rc={rc} elapsed={:.3} ms", elapsed.as_secs_f64() * 1000.0);
         if rc != 0 {
             unsafe { FreeLibrary(handle) };
-            return Err(std::io::Error::other(format!("formula compute failed rc={rc}")));
+            return Err(error::RtorchError::load(format!("formula compute failed rc={rc}")));
         }
         // The formula may set out->len to the true number of bytes written.
         let actual = out_blob.len.min(out_buf.len());
@@ -348,7 +349,7 @@ fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> std::io::Resu
         Ok(Vec::new())
     } else {
         unsafe { FreeLibrary(handle) };
-        Err(std::io::Error::other(
+        Err(error::RtorchError::load(
             "formula must implement rtorch_output_size + rtorch_compute (see rtorch.h) or legacy rtorch_main",
         ))
     }
@@ -435,11 +436,11 @@ fn execute_gpu(
     device: i32,
     gk: GpuKernelFn,
     out_size: Option<OutputSizeFn>,
-) -> std::io::Result<Vec<u8>> {
+) -> error::Result<Vec<u8>> {
     let glsl_ptr = unsafe { gk() };
     if glsl_ptr.is_null() {
         unsafe { FreeLibrary(handle) };
-        return Err(std::io::Error::other("formula returned null GLSL kernel"));
+        return Err(error::RtorchError::compile("formula returned null GLSL kernel"));
     }
     let glsl = unsafe { std::ffi::CStr::from_ptr(glsl_ptr) }.to_string_lossy().into_owned();
 

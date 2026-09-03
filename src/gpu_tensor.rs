@@ -16,8 +16,20 @@ fn f32_to_bytes(v: &[f32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).c
 fn bytes_to_f32(b: &[u8]) -> Vec<f32> { b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect() }
 fn u32_bytes(v: &[u32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
 
-fn spv(name: &str) -> Vec<u8> {
-    loc::read_kernel(name).unwrap_or_else(|e| panic!("spv {name}: {e}"))
+fn spv(name: &str) -> std::io::Result<Vec<u8>> {
+    loc::read_kernel(name).map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("spv {name}: {e}")))
+}
+
+// Load a kernel, add a pipeline, and check the returned pipe id. Returns the
+// pipe id or an io::Error (never panics) so a missing kernel / engine failure
+// surfaces as a clean error instead of a panic.
+fn pipe_kernel(dev: &GpuDevice, name: &str, in_bufs: &[i32], out: i32, groups: [u32; 3]) -> std::io::Result<i32> {
+    let spv = spv(name)?;
+    let id = dev.pipe_add(&spv, in_bufs, out, groups);
+    if id < 0 {
+        return Err(std::io::Error::other(format!("pipe_add {name} failed (id={id})")));
+    }
+    Ok(id)
 }
 
 pub struct GpuContext {
@@ -53,40 +65,26 @@ impl GpuContext {
         let scratch = dev.alloc(16);
         let s2 = dev.alloc(16);
         let s3 = dev.alloc(16);
-        let pipe_matmul = dev.pipe_add(&spv("gemm_tiled"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_matmul < 0 { return Err(std::io::Error::other("pipe_add matmul failed")); }
-        let pipe_matmul32 = dev.pipe_add(&spv("gemm_tile32"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_matmul32 < 0 { return Err(std::io::Error::other("pipe_add matmul32 failed")); }
-        let pipe_add = dev.pipe_add(&spv("add"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_add < 0 { return Err(std::io::Error::other("pipe_add add failed")); }
-        let pipe_tanh = dev.pipe_add(&spv("tanh"), &[scratch, s2], scratch, [1, 1, 1]);
-        if pipe_tanh < 0 { return Err(std::io::Error::other("pipe_add tanh failed")); }
-        let pipe_scale = dev.pipe_add(&spv("scale"), &[scratch, s2], scratch, [1, 1, 1]);
-        if pipe_scale < 0 { return Err(std::io::Error::other("pipe_add scale failed")); }
-        let pipe_mmgrad_a = dev.pipe_add(&spv("mmgrad_a"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_mmgrad_a < 0 { return Err(std::io::Error::other("pipe_add mmgrad_a failed")); }
-        let pipe_mmgrad_b = dev.pipe_add(&spv("mmgrad_b"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_mmgrad_b < 0 { return Err(std::io::Error::other("pipe_add mmgrad_b failed")); }
-        let pipe_tanhgrad = dev.pipe_add(&spv("tanhgrad"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_tanhgrad < 0 { return Err(std::io::Error::other("pipe_add tanhgrad failed")); }
+        let pipe_matmul = pipe_kernel(&dev, "gemm_tiled", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        let pipe_matmul32 = pipe_kernel(&dev, "gemm_tile32", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        let pipe_add = pipe_kernel(&dev, "add", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        let pipe_tanh = pipe_kernel(&dev, "tanh", &[scratch, s2], scratch, [1, 1, 1])?;
+        let pipe_scale = pipe_kernel(&dev, "scale", &[scratch, s2], scratch, [1, 1, 1])?;
+        let pipe_mmgrad_a = pipe_kernel(&dev, "mmgrad_a", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        let pipe_mmgrad_b = pipe_kernel(&dev, "mmgrad_b", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        let pipe_tanhgrad = pipe_kernel(&dev, "tanhgrad", &[scratch, s2, s3], scratch, [1, 1, 1])?;
         // gather: bind 0=E,1=ids,2=params,3=out
-        let pipe_gather = dev.pipe_add(&spv("gather"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_gather < 0 { return Err(std::io::Error::other("pipe_add gather failed")); }
-        // softmax-CE: bind 0=logits,1=target,2=params,3=grad,4=loss (grad=3rd input, loss=out via binding 4)
-        let pipe_ce = dev.pipe_add(&spv("ce"), &[scratch, s2, s3, scratch], scratch, [1, 1, 1]);
-        if pipe_ce < 0 { return Err(std::io::Error::other("pipe_add ce failed")); }
+        let pipe_gather = pipe_kernel(&dev, "gather", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        // softmax-CE: bind 0=logits,1=target,2=params,3=grad,4=loss
+        let pipe_ce = pipe_kernel(&dev, "ce", &[scratch, s2, s3, scratch], scratch, [1, 1, 1])?;
         // row softmax: bind 0=A(B×V),1=P(B,V),2=C(B×V)
-        let pipe_softmax = dev.pipe_add(&spv("softmax"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_softmax < 0 { return Err(std::io::Error::other("pipe_add softmax failed")); }
-        // adam: bind 0=param,1=grad,2=m,3=v,4=ps,5=out   (5 inputs + 1 out, binding count=6)
-        let pipe_adam = dev.pipe_add(&spv("adam"), &[scratch, s2, s3, scratch, scratch], scratch, [1, 1, 1]);
-        if pipe_adam < 0 { return Err(std::io::Error::other("pipe_add adam failed")); }
-        // gather_scatter: bind 0=EGrad,1=ids,2=P,3=dc  (3 inputs + 1 out, binding count=4)
-        let pipe_gather_scatter = dev.pipe_add(&spv("gather_scatter"), &[scratch, s2, s3], scratch, [1, 1, 1]);
-        if pipe_gather_scatter < 0 { return Err(std::io::Error::other("pipe_add gather_scatter failed")); }
-        // reduce: bind 0=dc,1=P,2=out  (2 inputs + 1 out, binding count=3)
-        let pipe_reduce = dev.pipe_add(&spv("reduce"), &[scratch, s2], scratch, [1, 1, 1]);
-        if pipe_reduce < 0 { return Err(std::io::Error::other("pipe_add reduce failed")); }
+        let pipe_softmax = pipe_kernel(&dev, "softmax", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        // adam: bind 0=param,1=grad,2=m,3=v,4=ps,5=out
+        let pipe_adam = pipe_kernel(&dev, "adam", &[scratch, s2, s3, scratch, scratch], scratch, [1, 1, 1])?;
+        // gather_scatter: bind 0=EGrad,1=ids,2=P,3=dc
+        let pipe_gather_scatter = pipe_kernel(&dev, "gather_scatter", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        // reduce: bind 0=dc,1=P,2=out
+        let pipe_reduce = pipe_kernel(&dev, "reduce", &[scratch, s2], scratch, [1, 1, 1])?;
         Ok(GpuContext { dev, pipe_matmul, pipe_matmul32, pipe_add, pipe_tanh, pipe_scale, pipe_mmgrad_a, pipe_mmgrad_b, pipe_tanhgrad, pipe_gather, pipe_ce, pipe_softmax, pipe_adam, pipe_gather_scatter, pipe_reduce, batch: std::cell::Cell::new(false), free_pending: std::cell::RefCell::new(Vec::new()), params_cache: std::cell::RefCell::new(std::collections::HashMap::new()) })
     }
 

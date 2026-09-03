@@ -13,4 +13,4 @@ pub mod gpu_tensor;
 pub mod gvar;
 pub mod rtw;
 
-pub use tensor::Tensor;
+pub use tensor::{Tensor, DType, Shape};

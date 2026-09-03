@@ -5,6 +5,8 @@
 
 pub mod error;
 pub mod loc;
+pub mod device;
+pub mod ops;
 pub mod tensor;
 pub mod autograd;
 pub mod vk;

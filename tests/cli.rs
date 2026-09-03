@@ -45,14 +45,24 @@ fn missing_formula_exit_1_no_panic() {
 #[test]
 fn formula_smoke_cpu() {
     // Full pipeline: compile the formula with g++, run it on CPU. Skipped if no
-    // g++ is available so the test stays green on machines without a toolchain.
+    // g++ is available (keeps the suite green without a toolchain). Input is
+    // self-generated so the test does not depend on a committed .bin fixture.
     if !gpp_available() { return; }
     let formula = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/formula_verify.cpp");
-    let input = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/input_1000.bin");
     if !std::path::Path::new(formula).exists() { return; }
+
+    // Generate a small float32 input (1000 values) in a temp file.
+    let dir = std::env::temp_dir();
+    let input = dir.join(format!("rtorch_cli_test_{}.bin", std::process::id()));
+    let vals: Vec<f32> = (0..1000).map(|i| i as f32 * 0.5).collect();
+    let mut bytes = Vec::with_capacity(vals.len() * 4);
+    for v in &vals { bytes.extend_from_slice(&v.to_le_bytes()); }
+    std::fs::write(&input, &bytes).unwrap();
+
     let out = Command::new(rtorch())
-        .arg(formula).arg("--input").arg(input).arg("--device").arg("cpu")
+        .arg(formula).arg("--input").arg(&input).arg("--device").arg("cpu")
         .output().unwrap();
+    let _ = std::fs::remove_file(&input);
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "status={:?} stderr={}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(s.contains("[verify] n=1000"), "stdout={s}");

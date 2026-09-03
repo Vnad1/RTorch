@@ -70,12 +70,17 @@ The test suite covers tensor correctness, autograd (including a central-differen
 
 - **Contributor:** [Vnad1](https://github.com/Vnad1/RTorch) is the sole contributor.
 - **AI-generated code:** This repository contains AI-assisted source code. The code has been reviewed and corrected: unreasonable patterns were removed and defects (including silent broadcasting bugs, Vulkan API misuse, and resource/lifetime issues) were fixed and are covered by tests and sanitizer/validation checks.
-- **License:** to be selected by the project owner.
+- **License:** GNU LGPL-3.0 (see [LICENSE](./LICENSE)).
+
+## License
+
+This project is licensed under the **GNU Lesser General Public License, version 3.0 (LGPL-3.0)** — see [LICENSE](./LICENSE).
+
+LGPL-3.0 applies to the RTorch library itself. Applications that **use** RTorch (e.g. a model framework built on it) may be under another license, provided they allow relinking/replacing the RTorch library portion (see the LGPL-3.0 terms). User **formulas** that only include the public interface header (`rtorch.h`) are not derivative works of the RTorch implementation and are not bound by this license (see `rtorch.h` header note and LGPL-3.0 §3).
 
 ## Related
 
 - `RTW.md` — the `.rtw` artifact format specification.
-- `CONCLUSION.md` — engineering findings.
 - A model layer built on RTorch (see the Striker project) is kept separate.
 
 ---

@@ -70,13 +70,17 @@ cargo clippy --release --all-targets
 
 - **贡献者:** [Vnad1](https://github.com/Vnad1/RTorch) 是唯一贡献者。
 - **AI 生成代码:** 本仓库包含 AI 辅助生成的源代码。代码已经过审查与修正:移除了不合理的模式,并修复了缺陷(包括静默广播错误、Vulkan API 误用、资源/生命周期问题),且这些由测试与 sanitizer/校验检查覆盖。
-- **许可证:** 由项目所有者后续选定。
 
 ## 相关
 
 - `RTW.md` — `.rtw` 产品格式规范。
-- `CONCLUSION.md` — 工程结论。
 - 构建在 RTorch 之上的模型层(见 Striker 项目)与之保持分离。
+
+## 许可证
+
+本项目采用 **GNU LGPL,version 3.0(LGPL-3.0)** —— 见 [LICENSE](./LICENSE)。
+
+LGPL-3.0 仅适用于 RTorch 库本身。**使用** RTorch 的应用(例如基于它构建的模型框架)可以采用其他许可,前提是允许对 RTorch 库部分**重链接/替换**(见 LGPL-3.0 条款)。用户**公式**若只包含公开接口头(`rtorch.h`),则不构成 RTorch 实现的衍生作品,不受本许可约束(详见 `rtorch.h` 顶部说明与 LGPL-3.0 §3)。
 
 ---
 

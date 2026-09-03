@@ -3,6 +3,14 @@
 // The framework (rtorch.exe) compiles the formula into a DLL, feeds it input
 // blobs, allocates the output, times the run, and surface the result.
 //
+// LICENSE NOTE (LGPL-3.0): this header is a PUBLIC INTERFACE (API type and
+// function declarations only) — it contains no implementation of the RTorch
+// library. A user formula that implements rtorch_output_size / rtorch_compute
+// is the author's own code and is NOT a derivative of the RTorch library, so it
+// is not bound by RTorch's LGPL-3.0 license; it remains under the author's
+// chosen license. (The framework compiles and loads the formula as a separate
+// plugin communicating through this ABI.)
+//
 // Contract: your formula MUST implement rtorch_output_size and rtorch_compute.
 // Everything else (compilation, I/O, device selection, timing) is the
 // framework's job. You may also implement the legacy rtorch_main entry.

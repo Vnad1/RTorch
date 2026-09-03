@@ -67,3 +67,74 @@ fn rejects_truncated() {
     t = bytes[..8].to_vec();
     assert!(rtw::decode(&t).is_err());
 }
+
+#[test]
+fn model_roundtrip_params_and_opt() {
+    let m = rtw::Model {
+        name: "test-net".into(),
+        version: 3,
+        params: vec![
+            rtw::NamedTensor { name: "W".into(), shape: vec![2, 3], dtype: rtw::DTYPE_FP32, data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0] },
+            rtw::NamedTensor { name: "b".into(), shape: vec![3], dtype: rtw::DTYPE_FP32, data: vec![0.1, 0.2, 0.3] },
+        ],
+        opt: Some(rtw::OptState {
+            m: vec![vec![1.0, 2.0], vec![3.0]],
+            v: vec![vec![0.5], vec![0.6, 0.7, 0.8]],
+            t: 42,
+        }),
+    };
+    let bytes = rtw::encode_model(&m);
+    let d = rtw::decode_model(&bytes).expect("decode model");
+    assert_eq!(d.name, "test-net");
+    assert_eq!(d.version, 3);
+    assert_eq!(d.params.len(), 2);
+    assert_eq!(d.params[0].name, "W");
+    assert_eq!(d.params[0].shape, vec![2, 3]);
+    assert_eq!(d.params[0].data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(d.params[1].data, vec![0.1, 0.2, 0.3]);
+    let o = d.opt.unwrap();
+    assert_eq!(o.t, 42);
+    assert_eq!(o.m, vec![vec![1.0, 2.0], vec![3.0]]);
+    assert_eq!(o.v, vec![vec![0.5], vec![0.6, 0.7, 0.8]]);
+}
+
+#[test]
+fn model_in_rtw_container_roundtrips() {
+    let m = rtw::Model {
+        name: "checkpoint".into(), version: 1,
+        params: vec![rtw::NamedTensor { name: "A".into(), shape: vec![2, 2], dtype: rtw::DTYPE_FP32, data: vec![1.0, 0.0, 0.0, 1.0] }],
+        opt: None,
+    };
+    let rtw = rtw::model_rtw(&m);
+    assert_eq!(rtw.kind, rtw::KIND_MODEL);
+    let bytes = rtw::encode(&rtw);
+    let dec = rtw::decode(&bytes).expect("decode container");
+    assert_eq!(dec.kind, rtw::KIND_MODEL);
+    let dm = rtw::decode_model(&dec.data).expect("decode model payload");
+    assert_eq!(dm.name, "checkpoint");
+    assert_eq!(dm.params[0].data, vec![1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn memory_roundtrip_fragments() {
+    let mem = rtw::Memory {
+        fragments: vec![
+            rtw::MemoryFragment { id: 7, state: vec![0.1, 0.2, 0.3], strength: 0.9 },
+            rtw::MemoryFragment { id: 9, state: vec![-1.0, 2.5], strength: 0.4 },
+        ],
+    };
+    let bytes = rtw::encode_memory(&mem);
+    let d = rtw::decode_memory(&bytes).expect("decode memory");
+    assert_eq!(d.fragments.len(), 2);
+    assert_eq!(d.fragments[0].id, 7);
+    assert_eq!(d.fragments[0].state, vec![0.1, 0.2, 0.3]);
+    assert!((d.fragments[0].strength - 0.9).abs() < 1e-9);
+    assert_eq!(d.fragments[1].state, vec![-1.0, 2.5]);
+
+    let rtww = rtw::memory_rtw(&mem);
+    let bytes2 = rtw::encode(&rtww);
+    let dec = rtw::decode(&bytes2).expect("decode memory container");
+    assert_eq!(dec.kind, rtw::KIND_MEMORY);
+    let dm = rtw::decode_memory(&dec.data).expect("decode memory payload");
+    assert_eq!(dm.fragments.len(), 2);
+}

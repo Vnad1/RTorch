@@ -48,11 +48,13 @@ pub fn matmul(a: &Var, b: &Var) -> Var {
     wrap(out, ar, bc, Node::MatMul(Rc::clone(a), Rc::clone(b), ar, ac, bc))
 }
 pub fn add(a: &Var, b: &Var) -> Var {
-    let r = a.borrow().r.max(b.borrow().r); let c = a.borrow().c.max(b.borrow().c);
+    let (ar, ac) = (a.borrow().r, a.borrow().c);
+    let (br, bc) = (b.borrow().r, b.borrow().c);
+    let (r, c) = crate::tensor::bcast_shape(ar, ac, br, bc).unwrap_or_else(|e| panic!("{e}"));
     let mut out = vec![0.0; r * c];
     for i in 0..r { for j in 0..c {
-        let va = a.borrow().data[(i % a.borrow().r) * a.borrow().c + (j % a.borrow().c)];
-        let vb = b.borrow().data[(i % b.borrow().r) * b.borrow().c + (j % b.borrow().c)];
+        let va = a.borrow().data[(i % ar) * ac + (j % ac)];
+        let vb = b.borrow().data[(i % br) * bc + (j % bc)];
         out[i * c + j] = va + vb;
     }}
     wrap(out, r, c, Node::Add(Rc::clone(a), Rc::clone(b), r, c))
@@ -72,21 +74,25 @@ pub fn sigmoid(a: &Var) -> Var {
     let out = a.borrow().data.iter().map(|v| 1.0 / (1.0 + (-v).exp())).collect();
     wrap(out, r, c, Node::Sigmoid(Rc::clone(a), r, c))
 }
-// 逐元素乘(广播): out[i,j] = a[i%ar,j%ac] * b[i%br,j%bc]
+// 逐元素乘(真广播): out[i,j] = a[i%ar,j%ac] * b[i%br,j%bc]; 不相容报 ShapeError.
 pub fn mul(a: &Var, b: &Var) -> Var {
-    let (r, c) = (a.borrow().r.max(b.borrow().r), a.borrow().c.max(b.borrow().c));
+    let (ar, ac) = (a.borrow().r, a.borrow().c);
+    let (br, bc) = (b.borrow().r, b.borrow().c);
+    let (r, c) = crate::tensor::bcast_shape(ar, ac, br, bc).unwrap_or_else(|e| panic!("{e}"));
     let mut out = vec![0.0; r * c];
     for i in 0..r { for j in 0..c {
-        let va = a.borrow().data[(i % a.borrow().r) * a.borrow().c + (j % a.borrow().c)];
-        let vb = b.borrow().data[(i % b.borrow().r) * b.borrow().c + (j % b.borrow().c)];
+        let va = a.borrow().data[(i % ar) * ac + (j % ac)];
+        let vb = b.borrow().data[(i % br) * bc + (j % bc)];
         out[i * c + j] = va * vb;
     }}
     wrap(out, r, c, Node::Mul(Rc::clone(a), Rc::clone(b), r, c))
 }
-// 查表: out(1×c) = e 的第 idx 行(快: O(c), 替代 onehot·matmul 的 O(V·c))
+// 查表: out(1×c) = e 的第 idx 行(快: O(c), 替代 onehot·matmul 的 O(V·c))。越界报错(不再静默钳到末行).
 pub fn gather(e: &Var, idx: usize) -> Var {
     let (v, c) = (e.borrow().r, e.borrow().c);
-    let i = idx.min(v - 1);
+    if v == 0 { panic!("tensor: gather on empty embedding (0 rows)"); }
+    if idx >= v { panic!("tensor: gather index {idx} out of range for embedding size {v}"); }
+    let i = idx;
     let out = (0..c).map(|j| e.borrow().data[i * c + j]).collect();
     wrap(out, 1, c, Node::Gather(Rc::clone(e), i, c))
 }
@@ -232,6 +238,10 @@ impl Adam {
         for p in params {
             let id = Rc::as_ptr(p) as usize;
             let g = p.borrow().grad.clone();
+            let n = p.borrow().data.len();
+            if g.len() != n {
+                panic!("tensor: adam grad len {} != param len {}", g.len(), n);
+            }
             let m = self.m.entry(id).or_insert_with(|| vec![0.0; g.len()]);
             let v = self.v.entry(id).or_insert_with(|| vec![0.0; g.len()]);
             for i in 0..g.len() {

@@ -204,15 +204,14 @@ pub fn matmul(a: &GpuTensor, b: &GpuTensor) -> GpuTensor {
 pub fn matmul32(a: &GpuTensor, b: &GpuTensor) -> GpuTensor { matmul(a, b) }
 
 // out[r×c] = a[i] + b[idx] (等长 elementwise 或 1-row/1-col 广播), 全 GPU 无 host tile.
+// 形状不相容报 ShapeError(不再静默回绕).
 pub fn add(a: &GpuTensor, b: &GpuTensor) -> GpuTensor {
-    let (r, c) = (a.r.max(b.r), a.c.max(b.c));
+    let (Ar, Ac) = (a.r, a.c);
+    let (Br, Bc) = (b.r, b.c);
+    let (r, c) = crate::tensor::bcast_shape(Ar, Ac, Br, Bc).unwrap_or_else(|e| panic!("{e}"));
     let n = r * c;
-    if a.r * a.c != n && b.r * b.c != n {
-        assert_eq!(a.r * a.c, b.r * b.c, "add length mismatch");
-    }
     let out = GpuTensor::alloc(Rc::clone(&a.ctx), r, c);
     // 等长直接用原 buffer; 广播(1×c / r×1) 由 kernel 按 bidx 读取, 无需 host tile/上传.
-    let (Ar, Ac) = (a.r, a.c); let (Br, Bc) = (b.r, b.c);
     let params = u32_bytes(&[Ar as u32, Ac as u32, Br as u32, Bc as u32]);
     let mb = a.ctx.get_params("add", &params);
     a.ctx.run_op(a.ctx.pipe_add, &[a.buf, b.buf, mb], out.buf, [((n as u32) + 255) / 256, 1, 1]);

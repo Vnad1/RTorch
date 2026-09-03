@@ -12,6 +12,20 @@ pub struct Tensor {
 }
 pub fn sigmoid(z: f64) -> f64 { 1.0 / (1.0 + (-z).exp()) }
 
+// Real broadcasting shape rule (right-aligned): a dim is compatible if equal or
+// one of the pair is 1. Returns the broadcast output shape, or a ShapeError
+// message on incompatibility. The old max+modulo path silently WROTE WRONG
+// results for incompatible shapes — this turns that into an explicit error.
+pub fn bcast_shape(r1: usize, c1: usize, r2: usize, c2: usize) -> Result<(usize, usize), String> {
+    let r = if r1 == r2 { r1 } else if r1 == 1 { r2 } else if r2 == 1 { r1 } else {
+        return Err(format!("shape: cannot broadcast {r1}×{c1} and {r2}×{c2} (row dims {r1} vs {r2} not equal or 1)"));
+    };
+    let c = if c1 == c2 { c1 } else if c1 == 1 { c2 } else if c2 == 1 { c1 } else {
+        return Err(format!("shape: cannot broadcast {r1}×{c1} and {r2}×{c2} (col dims {c1} vs {c2} not equal or 1)"));
+    };
+    Ok((r, c))
+}
+
 impl Tensor {
     pub fn zeros(r: usize, c: usize) -> Self { Tensor { data: vec![0.0; r * c], grad: vec![0.0; r * c], r, c } }
     pub fn ones(r: usize, c: usize) -> Self { Tensor { data: vec![1.0; r * c], grad: vec![0.0; r * c], r, c } }
@@ -24,6 +38,9 @@ impl Tensor {
 // out[r×c] = A[r×k] · B[k×c]
 pub fn matmul(a: &Tensor, b: &Tensor) -> Tensor {
     let (r, k, c) = (a.r, a.c, b.c);
+    if a.c != b.r {
+        panic!("shape: matmul dim mismatch A {r}×{} vs B {}×{c}", a.c, b.r);
+    }
     let mut out = Tensor::zeros(r, c);
     for i in 0..r {
         for j in 0..c {
@@ -38,14 +55,15 @@ pub fn matmul(a: &Tensor, b: &Tensor) -> Tensor {
 pub fn matvec(a: &Tensor, v: &Tensor) -> Tensor {
     matmul(a, v)
 }
-// 逐元素相加(同形广播: 若 b 是 1×1 or 同形)
+// 逐元素相加(真广播): 形状相容才允许, 不相容直接报 ShapeError(不再静默回绕).
 pub fn add(a: &Tensor, b: &Tensor) -> Tensor {
-    let mut out = Tensor::zeros(a.r.max(b.r), a.c.max(b.c));
+    let (r, c) = bcast_shape(a.r, a.c, b.r, b.c).unwrap_or_else(|e| panic!("{e}"));
+    let mut out = Tensor::zeros(r, c);
     for i in 0..out.r {
         for j in 0..out.c {
             let va = a.data[(i % a.r) * a.c + (j % a.c)];
             let vb = b.data[(i % b.r) * b.c + (j % b.c)];
-            out.data[i * out.c + j] = va + vb;
+            out.data[i * c + j] = va + vb;
         }
     }
     out
@@ -79,6 +97,9 @@ pub fn tile_row(row: &Tensor, times: usize) -> Tensor {
 // SGD: p.data -= lr * p.grad
 pub fn sgd_step(params: &mut [&mut Tensor], lr: f64) {
     for p in params {
+        if p.grad.len() != p.data.len() {
+            panic!("tensor: sgd grad len {} != param len {}", p.grad.len(), p.data.len());
+        }
         for i in 0..p.len() { p.data[i] -= lr * p.grad[i]; }
     }
 }

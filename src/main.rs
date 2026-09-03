@@ -17,10 +17,9 @@ use std::time::Instant;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 
-mod error;
-mod loc;
-mod rtw;
-mod vk;
+// Reuse the library's modules (single source of truth) instead of recompiling
+// the same rtw/vk/loc/error sources into this bin — one copy in rtorch::*.
+use rtorch::{error, loc, rtw, vk};
 
 #[cfg(windows)]
 #[link(name = "kernel32")]

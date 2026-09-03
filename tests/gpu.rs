@@ -122,3 +122,33 @@ fn cpu_gpu_numerical_agreement() {
         );
     }
 }
+
+#[test]
+fn cpu_gpu_precision_chain_stays_bounded() {
+    // A chain on CPU (f64) vs GPU (f32) must stay within f32 arithmetic tolerance,
+    // quantifying the precision divergence (CPU f64, GPU f32) rather than leaving
+    // it as an unknown.
+    use rtorch::device::Device;
+    use rtorch::ops;
+    let r = 16;
+    let k = 16;
+    let n = 16;
+    let a = Tensor::from_data((0..r * k).map(|i| ((i as f64) * 0.013).sin()).collect(), r, k);
+    let b = Tensor::from_data((0..k * n).map(|i| ((i as f64) * 0.021).cos()).collect(), k, n);
+
+    let cpu = ops::matmul(Device::Cpu, &a, &b).unwrap();
+    let gpu = match ops::matmul(Device::Gpu, &a, &b) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("GPU unavailable, skipping: {e}");
+            return;
+        }
+    };
+    let mut max_rel: f64 = 0.0;
+    for i in 0..cpu.data.len() {
+        let rel = (cpu.data[i] - gpu.data[i]).abs() / cpu.data[i].abs().max(1e-6);
+        if rel > max_rel { max_rel = rel; }
+    }
+    eprintln!("[precision] CPU(f64) vs GPU(f32) max rel err = {max_rel:.2e}");
+    assert!(max_rel < 1e-3, "CPU/GPU precision divergence too large: {max_rel:.2e}");
+}

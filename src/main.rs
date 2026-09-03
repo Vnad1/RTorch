@@ -602,11 +602,9 @@ fn load_symbol<T: Copy>(handle: *mut std::ffi::c_void, name: &str) -> Option<T> 
     let p = unsafe { GetProcAddress(handle, cname.as_ptr() as *const u8) };
     if p.is_null() {
         None
+    } else if std::mem::size_of::<T>() != std::mem::size_of::<*mut std::ffi::c_void>() {
+        None
     } else {
-        debug_assert_eq!(
-            std::mem::size_of::<T>(),
-            std::mem::size_of::<*mut std::ffi::c_void>()
-        );
         Some(unsafe { std::mem::transmute_copy::<*mut std::ffi::c_void, T>(&p) })
     }
 }
@@ -647,11 +645,9 @@ fn resolve_fn<T: Copy>(h: *mut std::ffi::c_void, name: &str) -> Option<T> {
     let p = unsafe { GetProcAddress(h, cname.as_ptr() as *const u8) };
     if p.is_null() {
         None
+    } else if std::mem::size_of::<T>() != std::mem::size_of::<*mut std::ffi::c_void>() {
+        None
     } else {
-        debug_assert_eq!(
-            std::mem::size_of::<T>(),
-            std::mem::size_of::<*mut std::ffi::c_void>()
-        );
         Some(unsafe { std::mem::transmute_copy::<*mut std::ffi::c_void, T>(&p) })
     }
 }

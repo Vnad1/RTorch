@@ -84,8 +84,11 @@ fn sym<T: Copy>(h: *mut c_void, name: &str) -> Option<T> {
     let p = unsafe { GetProcAddress(h, c.as_ptr() as *const u8) };
     if p.is_null() {
         None
+    } else if std::mem::size_of::<T>() != std::mem::size_of::<*mut c_void>() {
+        // Enforce the pointer-size contract at runtime so a non-pointer-sized T is
+        // never transmuted from a function pointer (avoid UB in release too).
+        None
     } else {
-        debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut c_void>());
         Some(unsafe { std::mem::transmute_copy::<*mut c_void, T>(&p) })
     }
 }

@@ -2,7 +2,7 @@
 //
 // It produces the runtime artifacts that used to be committed as binaries:
 //   * <target>/<profile>/rtorch_vk.dll   — C++ Vulkan engine (src/vk_engine.cpp)
-//   * <target>/<profile>/kernels/*.spv   — compiled GLSL compute kernels (examples/*.comp)
+//   * <target>/<profile>/kernels/*.spv   — compiled GLSL compute kernels (kernels/*.comp)
 //
 // External toolchain (auto-discovered, with clear errors):
 //   * MinGW g++                    — required to build the engine DLL
@@ -194,7 +194,7 @@ fn mtime(p: &Path) -> u64 {
 }
 
 fn list_comps(manifest: &Path) -> Vec<PathBuf> {
-    let dir = manifest.join("examples");
+    let dir = manifest.join("kernels");
     let mut out = Vec::new();
     if let Ok(rd) = fs::read_dir(&dir) {
         for e in rd.flatten() {

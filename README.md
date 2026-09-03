@@ -23,7 +23,9 @@ cd RTorch
 cargo build --release
 ```
 
-`cargo build --release` is the single build entry point: it builds the Rust library and the `rtorch` command, and `build.rs` compiles the C++ Vulkan engine into `rtorch_vk.dll` and the GLSL kernels (`examples/*.comp`) into `target/release/kernels/*.spv`.
+`cargo build --release` is the single build entry point: it builds the Rust library and the `rtorch` command, and `build.rs` compiles the C++ Vulkan engine into `rtorch_vk.dll` and the GLSL kernels (`kernels/*.comp`) into `target/release/kernels/*.spv`.
+
+Input blobs (`--input`) are user data files (raw float32/etc.); `rtorch` reads them as raw bytes and passes the blob to the formula.
 
 Environment overrides: `RTORCH_BUILD_ENGINE` (0 = CPU-only), `RTORCH_GXX`, `VULKAN_SDK`, `RTORCH_GLSLANG`.
 

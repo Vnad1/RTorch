@@ -23,7 +23,9 @@ cd RTorch
 cargo build --release
 ```
 
-`cargo build --release` 是唯一构建入口:它构建 Rust 库与 `rtorch` 命令,并由 `build.rs` 把 C++ Vulkan 引擎编译成 `rtorch_vk.dll`,把 GLSL 内核(`examples/*.comp`)编译到 `target/release/kernels/*.spv`。
+`cargo build --release` 是唯一构建入口:它构建 Rust 库与 `rtorch` 命令,并由 `build.rs` 把 C++ Vulkan 引擎编译成 `rtorch_vk.dll`,把 GLSL 内核(`kernels/*.comp`)编译到 `target/release/kernels/*.spv`。
+
+`--input` 输入文件是用户数据文件(原始 float32 等);`rtorch` 按原始字节读取并把 blob 传给公式。
 
 环境变量覆盖:`RTORCH_BUILD_ENGINE`(0 = 仅 CPU)、`RTORCH_GXX`、`VULKAN_SDK`、`RTORCH_GLSLANG`。
 

@@ -6,11 +6,6 @@
 
 use std::fmt;
 
-// error.rs is compiled into both the lib (public) and the rtorch bin (as a
-// private `mod`), so unused-in-older-target constructor helpers can warn about
-// dead code. These are public API factories; keep them.
-#![allow(dead_code)]
-
 #[derive(Debug)]
 pub enum RtorchError {
     /// The formula/GLSL/kernel source failed to compile.
@@ -67,6 +62,10 @@ impl From<std::io::Error> for RtorchError {
     fn from(e: std::io::Error) -> Self { RtorchError::Io(e.to_string()) }
 }
 
+// error.rs is compiled into both the lib (public) and the rtorch bin (private
+// `mod`), so some constructor helpers are unused-in-bin and warn about dead
+// code. These are public API factories; keep them.
+#[allow(dead_code)]
 impl RtorchError {
     pub fn compile(m: impl Into<String>) -> Self { RtorchError::CompileError(m.into()) }
     pub fn load(m: impl Into<String>) -> Self { RtorchError::LoadError(m.into()) }

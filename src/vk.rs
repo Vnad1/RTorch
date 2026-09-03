@@ -6,6 +6,8 @@
 
 use std::ffi::c_void;
 
+use crate::loc;
+
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -61,6 +63,10 @@ fn find_engine() -> std::io::Result<*mut c_void> {
             return Ok(load_module(&c.to_string_lossy()));
         }
     }
+    // Fall back to the locator (env override + exe-relative ancestors).
+    if let Ok(p) = loc::find_dll("rtorch_vk.dll") {
+        return Ok(load_module(&p.to_string_lossy()));
+    }
     Err(std::io::Error::other("rtorch_vk.dll not found (build vk_engine.cpp) — see vk_engine.cpp header"))
 }
 
@@ -76,13 +82,11 @@ fn sym<T: Copy>(h: *mut c_void, name: &str) -> Option<T> {
 }
 
 fn ensure_path() {
+    // Prepend known MSYS compiler bin dirs so a DLL's runtime deps
+    // (libwinpthread-1.dll) resolve on LoadLibrary.
     for dir in ["C:\\msys64\\ucrt64\\bin", "C:\\msys64\\mingw64\\bin"] {
-        if std::path::Path::new(dir).exists() {
-            let cur = std::env::var("PATH").unwrap_or_default();
-            if !cur.split(';').any(|p| p.eq_ignore_ascii_case(dir)) {
-                unsafe { let _ = std::env::set_var("PATH", format!("{};{}", dir, cur)); }
-            }
-        }
+        let p = std::path::Path::new(dir);
+        if p.exists() { loc::ensure_bin_on_path(p); }
     }
 }
 

@@ -6,7 +6,7 @@ use rtorch::gpu_tensor::GpuContext;
 use std::rc::Rc;
 
 fn spv(name: &str) -> Vec<u8> {
-    std::fs::read(&format!("D:/AP/rtorch/examples/{name}.spv")).unwrap_or_else(|e| panic!("spv {name}: {e}"))
+    rtorch::loc::read_kernel(name).unwrap_or_else(|e| panic!("spv {name}: {e}"))
 }
 
 fn main() {

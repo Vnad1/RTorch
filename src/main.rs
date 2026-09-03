@@ -19,6 +19,7 @@ use std::os::windows::ffi::OsStrExt;
 
 mod vk;
 mod rtw;
+mod loc;
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -50,6 +51,14 @@ struct Opts {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("rtorch {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        usage();
+        return;
+    }
     if args.iter().any(|a| a == "--vk-smoke") {
         vk_smoke();
         return;
@@ -100,19 +109,13 @@ fn usage() {
 // backend end-to-end (device discovery, pipeline build, dispatch, readback).
 #[cfg(windows)]
 fn vk_smoke() {
-    use std::io::Read;
-    let mut spv = Vec::new();
-    let spv_path = "examples/vec_mul.spv";
-    match std::fs::File::open(spv_path).and_then(|mut f| f.read_to_end(&mut spv)) {
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("vk-smoke: cannot read {spv_path}: {e}");
-            std::process::exit(1);
-        }
-    }
-    let n: usize = 8;
     let mono = env::args().any(|a| a == "--vk-mono");
-    let spv_path = if mono { "examples/mono.spv" } else { "examples/vec_mul.spv" };
+    let kernel = if mono { "mono" } else { "vec_mul" };
+    let spv = match loc::read_kernel(kernel) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("vk-smoke: cannot read kernel {kernel}.spv: {e}"); std::process::exit(1); }
+    };
+    let n: usize = 8;
     let a: Vec<u8> = (0..n).flat_map(|i| (i as f32).to_le_bytes()).collect();
     let b: Vec<u8> = (0..n).flat_map(|i| ((i as f32) * 2.0).to_le_bytes()).collect();
     let out_len = n * 4;
@@ -186,10 +189,16 @@ fn parse_args(args: &[String]) -> Option<Opts> {
 }
 
 fn find_compiler() -> Option<PathBuf> {
+    if let Ok(p) = env::var("RTORCH_GXX") {
+        let p = PathBuf::from(&p);
+        if p.exists() { return Some(p); }
+        eprintln!("rtorch: warning: RTORCH_GXX set but not found: {}", p.display());
+    }
     let candidates = [
         "C:\\msys64\\ucrt64\\bin\\g++.exe",
-        "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe",
         "C:\\msys64\\mingw64\\bin\\g++.exe",
+        "C:\\Strawberry\\c\\bin\\g++.exe",
+        "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe",
         "C:\\msys64\\usr\\bin\\g++.exe",
     ];
     for c in candidates {
@@ -354,19 +363,46 @@ fn load_dll(dll: &Path) -> std::io::Result<*mut std::ffi::c_void> {
     Ok(handle)
 }
 
-// Find a glslang compiler (glslangValidator preferred, else the SDK/tools copy).
+// Find a glslang compiler (glslangValidator.exe preferred, else glslang.exe;
+// honest about the tool actually shipping in tools/bin and the Vulkan SDK).
 fn find_glslang() -> Option<PathBuf> {
-    let candidates = [
-        "C:\\VulkanSDK\\1.4.357.0\\Bin\\glslangValidator.exe",
-        "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe",
-        "rtorch\\tools\\bin\\glslangValidator.exe",
-        "tools\\bin\\glslangValidator.exe",
-    ];
-    for c in candidates {
-        let p = Path::new(c);
-        if p.exists() {
-            return Some(p.to_path_buf());
+    if let Ok(p) = env::var("RTORCH_GLSLANG") {
+        let p = Path::new(&p);
+        if p.exists() { return Some(p.to_path_buf()); }
+        eprintln!("rtorch: warning: RTORCH_GLSLANG set but not found: {}", p.display());
+    }
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Ok(sdk) = env::var("VULKAN_SDK") {
+        let d = Path::new(&sdk);
+        cands.push(d.join("Bin").join("glslangValidator.exe"));
+        cands.push(d.join("Bin").join("glslang.exe"));
+    }
+    // newest SDK under C:\VulkanSDK (independent of VULKAN_SDK)
+    if let Ok(rd) = std::fs::read_dir("C:\\VulkanSDK") {
+        let mut vers: Vec<PathBuf> = Vec::new();
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.file_name().map(|n| n.to_string_lossy().starts_with('1')).unwrap_or(false) {
+                vers.push(p);
+            }
         }
+        vers.sort();
+        for v in vers.into_iter().rev() {
+            cands.push(v.join("Bin").join("glslangValidator.exe"));
+            cands.push(v.join("Bin").join("glslang.exe"));
+        }
+    }
+    // repo tools/bin (glslang.exe is what actually ships there)
+    if let Ok(cwd) = env::current_dir() {
+        cands.push(cwd.join("tools").join("bin").join("glslang.exe"));
+        cands.push(cwd.join("tools").join("bin").join("glslangValidator.exe"));
+    }
+    // relative: tools/bin
+    if let Some(exe) = loc::exe_dir() {
+        cands.push(exe.join("..").join("tools").join("bin").join("glslang.exe"));
+    }
+    for c in cands {
+        if c.exists() { return Some(c); }
     }
     None
 }

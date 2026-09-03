@@ -8,6 +8,7 @@
 // Current precision: f32. f64<->f32 conversion helpers are provided for the
 // autograd Var wiring (phase 3).
 
+use crate::loc;
 use crate::vk::GpuDevice;
 use std::rc::Rc;
 
@@ -16,8 +17,7 @@ fn bytes_to_f32(b: &[u8]) -> Vec<f32> { b.chunks_exact(4).map(|c| f32::from_le_b
 fn u32_bytes(v: &[u32]) -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() }
 
 fn spv(name: &str) -> Vec<u8> {
-    let p = format!("D:/AP/rtorch/examples/{name}.spv");
-    std::fs::read(&p).unwrap_or_else(|e| panic!("spv {name}: {e}"))
+    loc::read_kernel(name).unwrap_or_else(|e| panic!("spv {name}: {e}"))
 }
 
 pub struct GpuContext {

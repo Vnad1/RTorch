@@ -665,7 +665,7 @@ fn report_devices() -> u32 {
         .collect();
     let h = unsafe { LoadLibraryW(w.as_ptr()) };
     if h.is_null() {
-        println!("[rtorch] OpenCL: OpenCL.dll not found; host-only.");
+        eprintln!("[rtorch] OpenCL: OpenCL.dll not found; host-only.");
         return 0;
     }
     let get_platforms: Option<clGetPlatformIDs_t> = resolve_fn(h, "clGetPlatformIDs");
@@ -673,14 +673,14 @@ fn report_devices() -> u32 {
     let get_info: Option<clGetInfo_t> = resolve_fn(h, "clGetDeviceInfo");
 
     if get_platforms.is_none() {
-        println!("[rtorch] OpenCL: clGetPlatformIDs unavailable; host-only.");
+        eprintln!("[rtorch] OpenCL: clGetPlatformIDs unavailable; host-only.");
         unsafe { FreeLibrary(h) };
         return 0;
     }
     let mut nplat: u32 = 0;
     let status = unsafe { get_platforms.unwrap()(0, std::ptr::null_mut(), &mut nplat) };
     if status != 0 || nplat == 0 {
-        println!("[rtorch] OpenCL: no platform found (code {status}); host-only.");
+        eprintln!("[rtorch] OpenCL: no platform found (code {status}); host-only.");
         unsafe { FreeLibrary(h) };
         return 0;
     }
@@ -720,18 +720,18 @@ fn report_devices() -> u32 {
                     .next()
                     .unwrap_or(&[]),
             );
-            println!("[rtorch] OpenCL device: {name}");
+            eprintln!("[rtorch] OpenCL device: {name}");
             gpu_total += 1;
         }
     }
-    println!("[rtorch] OpenCL GPU devices discovered: {gpu_total}");
+    eprintln!("[rtorch] OpenCL GPU devices discovered: {gpu_total}");
     unsafe { FreeLibrary(h) };
     gpu_total
 }
 
 #[cfg(not(windows))]
 fn report_devices() -> u32 {
-    println!("[rtorch] OpenCL device enumeration is Windows-only in this preview.");
+    eprintln!("[rtorch] OpenCL device enumeration is Windows-only in this preview.");
     0
 }
 

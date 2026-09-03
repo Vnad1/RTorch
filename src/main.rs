@@ -195,19 +195,7 @@ fn find_compiler() -> Option<PathBuf> {
         if p.exists() { return Some(p); }
         eprintln!("rtorch: warning: RTORCH_GXX set but not found: {}", p.display());
     }
-    let candidates = [
-        "C:\\msys64\\ucrt64\\bin\\g++.exe",
-        "C:\\msys64\\mingw64\\bin\\g++.exe",
-        "C:\\Strawberry\\c\\bin\\g++.exe",
-        "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe",
-        "C:\\msys64\\usr\\bin\\g++.exe",
-    ];
-    for c in candidates {
-        let p = Path::new(c);
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
-    }
+    // Machine-agnostic: `where g++` (no hardcoded install paths in code).
     for name in ["g++.exe", "gcc.exe"] {
         if let Ok(out) = Command::new("where").arg(name).output() {
             if out.status.success() {

@@ -82,12 +82,9 @@ fn sym<T: Copy>(h: *mut c_void, name: &str) -> Option<T> {
 }
 
 fn ensure_path() {
-    // Prepend known MSYS compiler bin dirs so a DLL's runtime deps
-    // (libwinpthread-1.dll) resolve on LoadLibrary.
-    for dir in ["C:\\msys64\\ucrt64\\bin", "C:\\msys64\\mingw64\\bin"] {
-        let p = std::path::Path::new(dir);
-        if p.exists() { loc::ensure_bin_on_path(p); }
-    }
+    // The engine DLL is built fully static (see build.rs `-static`), so it has
+    // NO libwinpthread / compiler-runtime dependency. No PATH fixup is needed,
+    // and no dev-machine compiler path is hardcoded here. Kept as a no-op hook.
 }
 
 pub struct VkSession {

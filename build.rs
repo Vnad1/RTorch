@@ -79,6 +79,10 @@ fn main() {
     let st = Command::new(&gxx)
         .env("PATH", &path)
         .arg("-std=c++17").arg("-shared").arg("-O2")
+        // Static-link the whole MinGW runtime (incl. libwinpthread) so the DLL
+        // has NO dependency on the compiler's bin dir at load time — portable
+        // across machines regardless of where g++ lives.
+        .arg("-static")
         .arg("-static-libgcc").arg("-static-libstdc++")
         .arg("-I").arg(&inc)
         .arg(manifest.join("src").join("vk_engine.cpp"))
@@ -170,16 +174,8 @@ fn find_gxx() -> Option<PathBuf> {
         if p.exists() { return Some(p); }
         println!("cargo:warning=RTORCH_GXX set but not found: {}", p.display());
     }
-    for cand in [
-        "C:\\msys64\\ucrt64\\bin\\g++.exe",
-        "C:\\msys64\\mingw64\\bin\\g++.exe",
-        "C:\\Strawberry\\c\\bin\\g++.exe",
-        "C:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe",
-    ] {
-        let p = PathBuf::from(cand);
-        if p.exists() { return Some(p); }
-    }
-    // Don't use `where` in build.rs (no reliance on shell); check PATH directly.
+    // Machine-agnostic discovery: scan PATH for g++.exe. No hardcoded install
+    // paths — a machine that keeps g++ off PATH must set RTORCH_GXX (clear error).
     if let Ok(p) = env::var("PATH") {
         for d in p.split(';') {
             if d.is_empty() { continue; }

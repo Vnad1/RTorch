@@ -24,3 +24,9 @@ tools/
 *.swp
 Thumbs.db
 .DS_Store
+# MSVC / ASan artifacts
+*.exp
+*.ilk
+*.lib
+asanobj/
+enginetest*

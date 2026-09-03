@@ -106,8 +106,8 @@ static int init_device(VkInstance* inst, VkPhysicalDevice* pdev, VkDevice* dev,
     VkValidationFeaturesEXT vfs{};
     vfs.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
     VkValidationFeatureEnableEXT vvfe[2] = {
-        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION,
-        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_BEST_EFFORT
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT
     };
     vfs.enabledValidationFeatureCount = 2;
     vfs.pEnabledValidationFeatures = vvfe;

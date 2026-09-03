@@ -109,16 +109,14 @@ fn main() {
             println!("[build] rtorch_vk.dll -> {}", out_dll.display());
         }
         other => {
-            let msg = format!(
+            // Always fail loudly: a compile error with a present toolchain must not
+            // be swallowed (the previous 'warn + keep the stale DLL' masked real
+            // engine bugs, e.g. a wrong Vulkan enum name left a stale DLL).
+            panic!(
                 "compiling rtorch_vk.dll failed (g++ {other:?}): {} -> {}",
                 gxx.display(),
                 out_dll.display()
             );
-            if mode == "1" {
-                panic!("{msg}");
-            }
-            println!("cargo:warning={msg}");
-            return;
         }
     }
 

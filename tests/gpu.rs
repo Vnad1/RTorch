@@ -2,6 +2,7 @@
 // reasonable tolerance (never bit-exact). Skipped (passes) if the GPU/engine is
 // unavailable, so the suite stays green on machines without a working GPU.
 use rtorch::gpu::matmul_gpu;
+use rtorch::tensor::Tensor;
 
 #[test]
 fn gpu_matmul_small_matches_cpu_reference() {

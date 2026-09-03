@@ -103,7 +103,7 @@ fn abi_wrong_header_contract() {
 #include "rtorch.h"
 unsigned long long rtorch_output_size(int n, const rtorch_blob* in, int d){ (void)n;(void)in;(void)d; return 8; }
 int rtorch_compute(int n, const rtorch_blob* in, rtorch_blob* out, int d){ (void)n;(void)in;(void)d;
-    double q=1.5; for(int i=0;i<4;i++) ((float*)out->data)[i]=(float)q; return 0; }
+    float q=1.5f; for(int i=0;i<2;i++) ((float*)out->data)[i]=q; return 0; }
 "#;
     let o = run_formula(&dir, src, "rtw_abi_double.cpp");
     assert_eq!(o.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&o.stderr));

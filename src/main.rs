@@ -304,6 +304,9 @@ fn run(opts: &Opts, device: i32) -> error::Result<()> {
         .arg("-march=native")
         .arg("-ffast-math")
         .arg("-funroll-loops")
+        // Static-link the whole MinGW runtime (incl. libwinpthread) so the
+        // formula DLL has NO dependency on the compiler's bin dir at load time.
+        .arg("-static")
         .arg("-static-libgcc")
         .arg("-static-libstdc++")
         .arg(formula_path);

@@ -95,13 +95,23 @@ static int find_memtypes2(VkPhysicalDevice pdev, uint32_t* dmem, uint32_t* hmem)
 // Create instance + device + queue; fill dev-common members.
 static int init_device(VkInstance* inst, VkPhysicalDevice* pdev, VkDevice* dev,
                        VkQueue* queue, uint32_t* qfam) {
+    // Layer/extension names must outlive vkCreateInstance. They were previously
+    // scoped INSIDE the if-block, so ppEnabledLayerNames pointed at a destroyed
+    // local -> the loader dereferenced a dangling pointer and rejected the layer
+    // with "ppEnabledLayerNames contains string that is too long".
+    const char* layer_name = nullptr;
+    const char* debug_ext = nullptr;
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO; app.pApplicationName = "rtorch";
     app.applicationVersion = 1; app.pEngineName = "rtorch"; app.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO; ici.pApplicationInfo = &app;
-    if (want_validate()) { ici.enabledLayerCount = 1; const char* layer = "VK_LAYER_KHRONOS_validation"; ici.ppEnabledLayerNames = &layer;
-        ici.enabledExtensionCount = 1; const char* ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME; ici.ppEnabledExtensionNames = &ext; }
+    if (want_validate()) {
+        layer_name = "VK_LAYER_KHRONOS_validation";
+        debug_ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = &layer_name;
+        ici.enabledExtensionCount = 1; ici.ppEnabledExtensionNames = &debug_ext;
+    }
     if (vkCreateInstance(&ici, nullptr, inst) != VK_SUCCESS) return -1;
     uint32_t nd = 0; vkEnumeratePhysicalDevices(*inst, &nd, nullptr);
     std::vector<VkPhysicalDevice> ds(nd ? nd : 1);
@@ -119,9 +129,34 @@ found:;
     VkDeviceQueueCreateInfo dqci{};
     dqci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     dqci.queueFamilyIndex = *qfam; dqci.queueCount = 1; dqci.pQueuePriorities = &prio;
+    // gather_scatter uses OpAtomicFAddEXT (float atomics). Query which atomic
+    // float features the device supports and, if any, enable them on the logical
+    // device (chained via pNext). Without this, the shader module was rejected by
+    // the validation layer (VUID-RuntimeSpirv-None-06338) even on capable devices.
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_features{};
+    atomic_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+    VkPhysicalDeviceFeatures2 pd2{};
+    pd2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    pd2.pNext = &atomic_features;
+    vkGetPhysicalDeviceFeatures2(*pdev, &pd2);
+    bool has_atomic = atomic_features.shaderBufferFloat32AtomicAdd || atomic_features.shaderBufferFloat32Atomics;
+
+    // The shader also declares SPV_EXT_shader_atomic_float_add, so the device must
+    // enable the VK_EXT_shader_atomic_float extension too (not only the feature).
+    const char* atomic_ext_name = VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME;
+    uint32_t next = 0;
+    vkEnumerateDeviceExtensionProperties(*pdev, nullptr, &next, nullptr);
+    std::vector<VkExtensionProperties> exts(next);
+    vkEnumerateDeviceExtensionProperties(*pdev, nullptr, &next, exts.data());
+    bool has_atomic_ext = false;
+    for (auto& e : exts) { if (std::strcmp(e.extensionName, atomic_ext_name) == 0) has_atomic_ext = true; }
+    const char* ext_names[1] = { atomic_ext_name };
+
     VkDeviceCreateInfo dci{};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &dqci;
+    if (has_atomic) dci.pNext = &atomic_features;
+    if (has_atomic_ext) { dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = ext_names; }
     if (vkCreateDevice(*pdev, &dci, nullptr, dev) != VK_SUCCESS) {
         vkDestroyInstance(*inst, nullptr); return -1;
     }
@@ -200,8 +235,12 @@ __declspec(dllexport) int rtorch_vk_init(
         if (i < (uint32_t)num_inputs) cu |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         else cu |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         if (mk_buf(c->dev, sz, cu, c->dmem, &c->cbufs[i], &c->cmems[i]) != 0) return -1;
+        // Host staging buffers are the SOURCE of the copy-up (inputs) and the
+        // DESTINATION of the copy-down (output). Flags were previously swapped,
+        // which violated vkCmdCopyBuffer usage VUIDs (caught by the validation
+        // layer) even though the smoke produced a correct result by luck.
         VkBufferUsageFlags su = (i < (uint32_t)num_inputs)
-            ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         if (mk_buf(c->dev, sz, su, c->hmem, &c->stbufs[i], &c->stmems[i]) != 0) return -1;
     }
 
@@ -226,6 +265,8 @@ __declspec(dllexport) int rtorch_vk_init(
 
     VkCommandPoolCreateInfo cpci2{};
     cpci2.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cpci2.queueFamilyIndex = c->qfam;
+    // Reused across dispatch reps (warmup/reps) -> must allow implicit reset.
+    cpci2.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     if (vkCreateCommandPool(c->dev, &cpci2, nullptr, &c->cpool) != VK_SUCCESS) return -1;
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -361,6 +402,9 @@ __declspec(dllexport) int rtorch_vk_dev_init() {
     if (vkCreateDescriptorPool(d->dev, &dpci, nullptr, &d->pool) != VK_SUCCESS) return -1;
     VkCommandPoolCreateInfo cpci{};
     cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cpci.queueFamilyIndex = d->qfam;
+    // rec_cbuf is re-recorded on each batch (begin_batch -> record -> submit);
+    // implicit reset requires this flag.
+    cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     if (vkCreateCommandPool(d->dev, &cpci, nullptr, &d->cpool) != VK_SUCCESS) return -1;
     VkCommandBufferAllocateInfo rbai{};
     rbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;

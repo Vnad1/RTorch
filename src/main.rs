@@ -89,6 +89,12 @@ fn main() {
     // Resolve device: explicit flag wins, else auto (GPU if any).
     let device = if opts.device >= 0 { opts.device } else if gpu_count > 0 { 1 } else { 0 };
 
+    // Explicit --device gpu with no GPU available must report clearly, not crash.
+    if opts.device == 1 && gpu_count == 0 {
+        eprintln!("rtorch: GPU unavailable (no OpenCL/Vulkan compute device found); use --device cpu or check the Vulkan driver");
+        std::process::exit(1);
+    }
+
     match run(&opts, device) {
         Ok(()) => {}
         Err(e) => {

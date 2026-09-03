@@ -90,22 +90,9 @@ fn ensure_path() {
 pub struct VkSession {
     engine: Engine,
     ctx: i32,
-    last_hash: u64,
-}
-
-// 64-bit FNV-1a over the concatenated input bytes (stable, collision-safe enough
-// for reuse detection in the benchmark hot loop).
-fn inputs_hash(inputs: &[Vec<u8>]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in inputs {
-        for &x in b.iter() {
-            h ^= x as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        h ^= 0xff; // separator
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+    // The previous dispatch's input bytes, so reuse is detected by byte-equality
+    // (an FNV hash could collide and silently reuse a STALE GPU buffer).
+    last_inputs: Option<Vec<Vec<u8>>>,
 }
 
 impl VkSession {
@@ -135,15 +122,15 @@ impl VkSession {
             unsafe { FreeLibrary(handle) };
             return Err(std::io::Error::other(format!("rtorch_vk_init failed (ctx={ctx})")));
         }
-        Ok(VkSession { engine, ctx, last_hash: 0 })
+        Ok(VkSession { engine, ctx, last_inputs: None })
     }
 
     /// Dispatch one compute pass. `inputs` are the N input blobs (same lengths
     /// as given at init), `out` must be at least out_len bytes. Returns elapsed ms.
     pub fn dispatch(&mut self, inputs: &[Vec<u8>], groups: [u32; 3], out: &mut [u8]) -> std::io::Result<f64> {
-        let h = inputs_hash(inputs);
-        let reuse = if self.last_hash == h { 1 } else { 0 };
-        self.last_hash = h;
+        // Reuse only when the input bytes are byte-identical (never by hash).
+        let reuse = if self.last_inputs.as_deref() == Some(inputs) { 1 } else { 0 };
+        self.last_inputs = Some(inputs.to_vec());
         let in_ptrs: Vec<*const c_void> = inputs.iter().map(|b| b.as_ptr() as *const c_void).collect();
         let mut elapsed: f64 = 0.0;
         let rc = unsafe {

@@ -101,6 +101,16 @@ static int init_device(VkInstance* inst, VkPhysicalDevice* pdev, VkDevice* dev,
     // with "ppEnabledLayerNames contains string that is too long".
     const char* layer_name = nullptr;
     const char* debug_ext = nullptr;
+    const char* feats_ext = VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME;
+    const char* ext_names_inst[2] = { debug_ext, feats_ext };
+    VkValidationFeaturesEXT vfs{};
+    vfs.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+    VkValidationFeatureEnableEXT vvfe[2] = {
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION,
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_BEST_EFFORT
+    };
+    vfs.enabledValidationFeatureCount = 2;
+    vfs.pEnabledValidationFeatures = vvfe;
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO; app.pApplicationName = "rtorch";
     app.applicationVersion = 1; app.pEngineName = "rtorch"; app.apiVersion = VK_API_VERSION_1_1;
@@ -109,8 +119,12 @@ static int init_device(VkInstance* inst, VkPhysicalDevice* pdev, VkDevice* dev,
     if (want_validate()) {
         layer_name = "VK_LAYER_KHRONOS_validation";
         debug_ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        // vfs + both instance extensions must outlive vkCreateInstance.
+        ext_names_inst[0] = debug_ext;
+        ext_names_inst[1] = feats_ext;
         ici.enabledLayerCount = 1; ici.ppEnabledLayerNames = &layer_name;
-        ici.enabledExtensionCount = 1; ici.ppEnabledExtensionNames = &debug_ext;
+        ici.enabledExtensionCount = 2; ici.ppEnabledExtensionNames = ext_names_inst;
+        ici.pNext = &vfs;
     }
     if (vkCreateInstance(&ici, nullptr, inst) != VK_SUCCESS) return -1;
     uint32_t nd = 0; vkEnumeratePhysicalDevices(*inst, &nd, nullptr);

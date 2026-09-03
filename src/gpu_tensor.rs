@@ -32,22 +32,28 @@ fn pipe_kernel(dev: &GpuDevice, name: &str, in_bufs: &[i32], out: i32, groups: [
     Ok(id)
 }
 
+/// Kernel registry — maps a kernel name to its pipeline id. New GPU kernels
+/// (matmul/add/tanh/... plus future user kernels) are registered here instead of
+/// being hardcoded as struct fields, so the Vulkan backend is extensible without
+/// touching the runtime each time.
+#[derive(Default)]
+pub struct KernelRegistry {
+    map: std::collections::HashMap<String, i32>,
+}
+
+impl KernelRegistry {
+    pub fn insert(&mut self, name: &str, pipe: i32) { self.map.insert(name.to_string(), pipe); }
+    pub fn get(&self, name: &str) -> Option<i32> { self.map.get(name).copied() }
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.map.keys().cloned().collect();
+        v.sort();
+        v
+    }
+}
+
 pub struct GpuContext {
     pub dev: Rc<GpuDevice>,
-    pipe_matmul: i32,
-    pipe_matmul32: i32,
-    pipe_add: i32,
-    pipe_tanh: i32,
-    pipe_scale: i32,
-    pipe_mmgrad_a: i32,
-    pipe_mmgrad_b: i32,
-    pipe_tanhgrad: i32,
-    pipe_gather: i32,
-    pipe_ce: i32,
-    pipe_softmax: i32,
-    pipe_adam: i32,
-    pipe_gather_scatter: i32,
-    pipe_reduce: i32,
+    pub kernels: KernelRegistry,
     batch: std::cell::Cell<bool>,
     free_pending: std::cell::RefCell<Vec<i32>>,
     // 持久 params buffer 缓存: (op_tag, bytes) -> buffer id. 值不变时复用(免重复 upload/sync).
@@ -65,27 +71,36 @@ impl GpuContext {
         let scratch = dev.alloc(16);
         let s2 = dev.alloc(16);
         let s3 = dev.alloc(16);
-        let pipe_matmul = pipe_kernel(&dev, "gemm_tiled", &[scratch, s2, s3], scratch, [1, 1, 1])?;
-        let pipe_matmul32 = pipe_kernel(&dev, "gemm_tile32", &[scratch, s2, s3], scratch, [1, 1, 1])?;
-        let pipe_add = pipe_kernel(&dev, "add", &[scratch, s2, s3], scratch, [1, 1, 1])?;
-        let pipe_tanh = pipe_kernel(&dev, "tanh", &[scratch, s2], scratch, [1, 1, 1])?;
-        let pipe_scale = pipe_kernel(&dev, "scale", &[scratch, s2], scratch, [1, 1, 1])?;
-        let pipe_mmgrad_a = pipe_kernel(&dev, "mmgrad_a", &[scratch, s2, s3], scratch, [1, 1, 1])?;
-        let pipe_mmgrad_b = pipe_kernel(&dev, "mmgrad_b", &[scratch, s2, s3], scratch, [1, 1, 1])?;
-        let pipe_tanhgrad = pipe_kernel(&dev, "tanhgrad", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        // Register every kernel in the registry (name -> pipeline id). Each
+        // kernel's descriptor binding count is set at pipe_add time; binding
+        // content is re-pointed per op via pipe_bind.
+        let mut kernels = KernelRegistry::default();
+        kernels.insert("gemm_tiled", pipe_kernel(&dev, "gemm_tiled", &[scratch, s2, s3], scratch, [1, 1, 1])?);
+        kernels.insert("gemm_tile32", pipe_kernel(&dev, "gemm_tile32", &[scratch, s2, s3], scratch, [1, 1, 1])?);
+        kernels.insert("add", pipe_kernel(&dev, "add", &[scratch, s2, s3], scratch, [1, 1, 1])?);
+        kernels.insert("tanh", pipe_kernel(&dev, "tanh", &[scratch, s2], scratch, [1, 1, 1])?);
+        kernels.insert("scale", pipe_kernel(&dev, "scale", &[scratch, s2], scratch, [1, 1, 1])?);
+        kernels.insert("mmgrad_a", pipe_kernel(&dev, "mmgrad_a", &[scratch, s2, s3], scratch, [1, 1, 1])?);
+        kernels.insert("mmgrad_b", pipe_kernel(&dev, "mmgrad_b", &[scratch, s2, s3], scratch, [1, 1, 1])?);
+        kernels.insert("tanhgrad", pipe_kernel(&dev, "tanhgrad", &[scratch, s2, s3], scratch, [1, 1, 1])?);
         // gather: bind 0=E,1=ids,2=params,3=out
-        let pipe_gather = pipe_kernel(&dev, "gather", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        kernels.insert("gather", pipe_kernel(&dev, "gather", &[scratch, s2, s3], scratch, [1, 1, 1])?);
         // softmax-CE: bind 0=logits,1=target,2=params,3=grad,4=loss
-        let pipe_ce = pipe_kernel(&dev, "ce", &[scratch, s2, s3, scratch], scratch, [1, 1, 1])?;
+        kernels.insert("ce", pipe_kernel(&dev, "ce", &[scratch, s2, s3, scratch], scratch, [1, 1, 1])?);
         // row softmax: bind 0=A(B×V),1=P(B,V),2=C(B×V)
-        let pipe_softmax = pipe_kernel(&dev, "softmax", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        kernels.insert("softmax", pipe_kernel(&dev, "softmax", &[scratch, s2, s3], scratch, [1, 1, 1])?);
         // adam: bind 0=param,1=grad,2=m,3=v,4=ps,5=out
-        let pipe_adam = pipe_kernel(&dev, "adam", &[scratch, s2, s3, scratch, scratch], scratch, [1, 1, 1])?;
+        kernels.insert("adam", pipe_kernel(&dev, "adam", &[scratch, s2, s3, scratch, scratch], scratch, [1, 1, 1])?);
         // gather_scatter: bind 0=EGrad,1=ids,2=P,3=dc
-        let pipe_gather_scatter = pipe_kernel(&dev, "gather_scatter", &[scratch, s2, s3], scratch, [1, 1, 1])?;
+        kernels.insert("gather_scatter", pipe_kernel(&dev, "gather_scatter", &[scratch, s2, s3], scratch, [1, 1, 1])?);
         // reduce: bind 0=dc,1=P,2=out
-        let pipe_reduce = pipe_kernel(&dev, "reduce", &[scratch, s2], scratch, [1, 1, 1])?;
-        Ok(GpuContext { dev, pipe_matmul, pipe_matmul32, pipe_add, pipe_tanh, pipe_scale, pipe_mmgrad_a, pipe_mmgrad_b, pipe_tanhgrad, pipe_gather, pipe_ce, pipe_softmax, pipe_adam, pipe_gather_scatter, pipe_reduce, batch: std::cell::Cell::new(false), free_pending: std::cell::RefCell::new(Vec::new()), params_cache: std::cell::RefCell::new(std::collections::HashMap::new()) })
+        kernels.insert("reduce", pipe_kernel(&dev, "reduce", &[scratch, s2], scratch, [1, 1, 1])?);
+        Ok(GpuContext { dev, kernels, batch: std::cell::Cell::new(false), free_pending: std::cell::RefCell::new(Vec::new()), params_cache: std::cell::RefCell::new(std::collections::HashMap::new()) })
+    }
+
+    /// Look up a registered kernel's pipeline id (panic on a typo — programmer error).
+    pub fn pipe(&self, name: &str) -> i32 {
+        self.kernels.get(name).unwrap_or_else(|| panic!("kernel not registered: {name}"))
     }
 
     fn alloc_out(&self, n: usize) -> i32 { self.dev.alloc(n * 4) }
@@ -196,7 +211,7 @@ pub fn matmul(a: &GpuTensor, b: &GpuTensor) -> GpuTensor {
     let params = u32_bytes(&[r as u32, c as u32, k as u32]);
     let pb = a.ctx.get_params("gemm_tile32", &params);
     let inb = [a.buf, b.buf, pb];
-    a.ctx.run_op(a.ctx.pipe_matmul32, &inb, out.buf, [((c as u32) + 31) / 32, ((r as u32) + 31) / 32, 1]);
+    a.ctx.run_op(a.ctx.pipe("gemm_tile32"), &inb, out.buf, [((c as u32) + 31) / 32, ((r as u32) + 31) / 32, 1]);
     out
 }
 
@@ -214,7 +229,7 @@ pub fn add(a: &GpuTensor, b: &GpuTensor) -> GpuTensor {
     // 等长直接用原 buffer; 广播(1×c / r×1) 由 kernel 按 bidx 读取, 无需 host tile/上传.
     let params = u32_bytes(&[Ar as u32, Ac as u32, Br as u32, Bc as u32]);
     let mb = a.ctx.get_params("add", &params);
-    a.ctx.run_op(a.ctx.pipe_add, &[a.buf, b.buf, mb], out.buf, [((n as u32) + 255) / 256, 1, 1]);
+    a.ctx.run_op(a.ctx.pipe("add"), &[a.buf, b.buf, mb], out.buf, [((n as u32) + 255) / 256, 1, 1]);
     out
 }
 
@@ -235,7 +250,7 @@ pub fn tanh(a: &GpuTensor) -> GpuTensor {
     let params = u32_bytes(&[n as u32]);
     let pb = a.ctx.get_params("tanh", &params);
     let inb = [a.buf, pb];
-    a.ctx.run_op(a.ctx.pipe_tanh, &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
+    a.ctx.run_op(a.ctx.pipe("tanh"), &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
     out
 }
 
@@ -246,7 +261,7 @@ pub fn scale(s: f32, a: &GpuTensor) -> GpuTensor {
     let params = u32_bytes(&[n as u32, s.to_bits()]);
     let pb = a.ctx.get_params("scale", &params);
     let inb = [a.buf, pb];
-    a.ctx.run_op(a.ctx.pipe_scale, &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
+    a.ctx.run_op(a.ctx.pipe("scale"), &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
     out
 }
 
@@ -262,7 +277,7 @@ pub fn gather(emb: &GpuTensor, ids: &[usize], b: usize) -> GpuTensor {
     let params = u32_bytes(&[b as u32, e as u32]);
     let pb = ctx.get_params("gather", &params);
     let inb = [emb.buf, ib, pb];
-    ctx.run_op(ctx.pipe_gather, &inb, out.buf, [((b * e) as u32 + 255) / 256, 1, 1]);
+    ctx.run_op(ctx.pipe("gather"), &inb, out.buf, [((b * e) as u32 + 255) / 256, 1, 1]);
     ctx.ctx_free(ib);
     out
 }
@@ -283,7 +298,7 @@ pub fn ce(logits: &GpuTensor, target: &[usize]) -> (GpuTensor, GpuTensor) {
     let params = u32_bytes(&[b as u32, v as u32]);
     let pb = ctx.get_params("ce", &params);
     let inb = [logits.buf, tb, pb, grad.buf];
-    ctx.run_op(ctx.pipe_ce, &inb, loss_buf, [b as u32, 1, 1]);
+    ctx.run_op(ctx.pipe("ce"), &inb, loss_buf, [b as u32, 1, 1]);
     ctx.ctx_free(tb);
     let loss_t = GpuTensor { ctx: Rc::clone(&ctx), buf: loss_buf, r: b, c: 1 };
     (loss_t, grad)
@@ -307,7 +322,7 @@ pub fn adam_step(param: &GpuTensor, grad: &GpuTensor, m: &GpuTensor, v: &GpuTens
     let ps = u32_bytes(&[n as u32, t, lr.to_bits(), b1.to_bits(), b2.to_bits(), eps.to_bits()]);
     let pb = ctx.get_params("adam", &ps);
     let inb = [param.buf, grad.buf, m.buf, v.buf, pb];
-    ctx.run_op(ctx.pipe_adam, &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
+    ctx.run_op(ctx.pipe("adam"), &inb, out.buf, [((n as u32) + 255) / 256, 1, 1]);
     out
 }
 
@@ -319,7 +334,7 @@ pub fn softmax(a: &GpuTensor) -> GpuTensor {
     let params = u32_bytes(&[b as u32, v as u32]);
     let pb = ctx.get_params("softmax", &params);
     let inb = [a.buf, pb];
-    ctx.run_op(ctx.pipe_softmax, &inb, out.buf, [b as u32, 1, 1]);
+    ctx.run_op(ctx.pipe("softmax"), &inb, out.buf, [b as u32, 1, 1]);
     out
 }
 
@@ -336,7 +351,7 @@ pub fn gather_backward(emb: &GpuTensor, ids: &[usize], dc: &GpuTensor, b: usize)
     let params = u32_bytes(&[b as u32, e as u32]);
     let pb = ctx.get_params("gather_scatter", &params);
     let inb = [out.buf, ib, pb];
-    ctx.run_op(ctx.pipe_gather_scatter, &inb, dc.buf, [((b * e) as u32 + 255) / 256, 1, 1]);
+    ctx.run_op(ctx.pipe("gather_scatter"), &inb, dc.buf, [((b * e) as u32 + 255) / 256, 1, 1]);
     ctx.ctx_free(ib);
     out
 }
@@ -350,7 +365,7 @@ pub fn reduce_sum(dc: &GpuTensor, dr: usize, dc_dim: usize) -> GpuTensor {
     let params = u32_bytes(&[dc.r as u32, dc.c as u32, dr as u32, dc_dim as u32]);
     let pb = ctx.get_params("reduce", &params);
     let inb = [dc.buf, pb];
-    ctx.run_op(ctx.pipe_reduce, &inb, out.buf, [((dr * dc_dim) as u32 + 255) / 256, 1, 1]);
+    ctx.run_op(ctx.pipe("reduce"), &inb, out.buf, [((dr * dc_dim) as u32 + 255) / 256, 1, 1]);
     out
 }
 
@@ -365,10 +380,10 @@ pub fn matmul_backward(a: &GpuTensor, b: &GpuTensor, dC: &GpuTensor) -> (GpuTens
     let pb = a.ctx.get_params("mmgrad", &params);
     // dA
     let ina = [dC.buf, b.buf, pb];
-    a.ctx.run_op(a.ctx.pipe_mmgrad_a, &ina, da.buf, [((m as u32) + 15) / 16, ((k as u32) + 15) / 16, 1]);
+    a.ctx.run_op(a.ctx.pipe("mmgrad_a"), &ina, da.buf, [((m as u32) + 15) / 16, ((k as u32) + 15) / 16, 1]);
     // dB
     let inb = [a.buf, dC.buf, pb];
-    a.ctx.run_op(a.ctx.pipe_mmgrad_b, &inb, db.buf, [((k as u32) + 15) / 16, ((n as u32) + 15) / 16, 1]);
+    a.ctx.run_op(a.ctx.pipe("mmgrad_b"), &inb, db.buf, [((k as u32) + 15) / 16, ((n as u32) + 15) / 16, 1]);
     (da, db)
 }
 
@@ -380,6 +395,6 @@ pub fn tanh_backward(dC: &GpuTensor, a: &GpuTensor) -> GpuTensor {
     let params = u32_bytes(&[n as u32]);
     let pb = dC.ctx.get_params("tanhgrad", &params);
     let inb = [dC.buf, a.buf, pb];
-    dC.ctx.run_op(dC.ctx.pipe_tanhgrad, &inb, da.buf, [((n as u32) + 255) / 256, 1, 1]);
+    dC.ctx.run_op(dC.ctx.pipe("tanhgrad"), &inb, da.buf, [((n as u32) + 255) / 256, 1, 1]);
     da
 }

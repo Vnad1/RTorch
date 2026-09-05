@@ -31,27 +31,95 @@ cargo build --release
 
 ## 使用方法(CLI)
 
-在 CPU 上运行一个公式:
+`rtorch` 运行公式:传 `.cpp` 会现场编译,传 `.dll` 则直接加载。公式实现
+`rtorch_output_size` + `rtorch_compute`(见 `rtorch.h`),框架负责编译/加载、喂入
+输入 blob、分配输出、计时并给出结果。
+
+### 语法
+
+```
+rtorch <formula.cpp|.dll> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]
+```
+
+| 参数 | 含义 |
+|---|---|
+| `<formula.cpp>` | 公式源码;现场编译(需 `g++`) |
+| `<formula.dll>` | 预编译的公式 DLL(如 `delta.dll`);直接加载,无需编译器 |
+| `with <refs...>` | 附加的源/目标文件,一起编译(可选) |
+| `--input <file>` | 喂给公式的原始字节 blob;可多次 |
+| `--output <file>` | 把结果 blob 写到文件;默认 stdout |
+| `--device cpu\|gpu` | `cpu`=宿主,`gpu`=最佳加速器(Vulkan compute) |
+
+### CPU 上运行公式源码
 
 ```sh
 rtorch examples/formula_verify.cpp --input examples/input_1000.bin --device cpu
 ```
 
-在 GPU 上运行一个公式(若公式导出 GLSL 内核):
+### GPU 上运行(若公式导出 GLSL 内核)
 
 ```sh
 rtorch examples/formula_gpu.cpp --device gpu --input examples/input_1000.bin
 ```
 
-直接引用一个**预编译的公式 DLL**(无需现场编译、无需 g++)——用于分发已编译的
-公式(如 `delta.dll`):
+### 使用预编译的公式 DLL(无需编译器、无需现场编译)
+
+分发一个已编译的公式(如 `delta.dll`)并直接引用:
 
 ```sh
-rtorch delta.dll --input examples/input_1000.bin --device cpu
+rtorch delta.dll --input trig_input.bin --device cpu
 ```
 
-框架加载该 DLL 并调用 `rtorch_output_size` / `rtorch_compute`(GPU 下还有
-`rtorch_gpu_kernel`)。传 `.cpp` 会现场编译;传 `.dll` 则直接加载。
+`rtorch.exe` 会 `LoadLibrary` 该 DLL 并调用 `rtorch_output_size` /
+`rtorch_compute`(GPU 下还有 `rtorch_gpu_kernel`)。这是把公式分发到无编译器机器的
+最快方式。
+
+### 三角函数公式示例(`examples/formula_trig.cpp` / `delta.dll`)
+
+`formula_trig.cpp` 读取 float32 数组 `x[i]`,每元素写一个三元组
+`[sin(x), cos(x), tan(x)]`(每 1 个输入 float 输出 3 个 float)。
+
+```sh
+# 编译+运行源码(需 g++)
+rtorch examples/formula_trig.cpp --input trig_input.bin --output trig_out.bin --device cpu
+
+# 加载预编译 DLL(无需 g++)
+rtorch delta.dll --input trig_input.bin --output trig_out.bin --device cpu
+
+# 用 DLL 内嵌的 GLSL 内核跑 GPU(Vulkan)
+rtorch delta.dll --input trig_input.bin --output trig_out.bin --device gpu
+```
+
+`trig_input.bin` 是原始小端 float32 数组,例如角度 `0, π/6, π/4, π/3, π/2`。
+输出为 `3×n` 个 float32。CPU 与 GPU 逐位一致(已被验证)。
+
+### 把公式打包成自包含的 `.rtw` 容器
+
+`--pack` 把公式源码打包进 `RTW.md` 描述的运行时容器;运行该 `.rtw` 即执行内嵌
+公式(之后不再需要源码文件):
+
+```sh
+rtorch --pack examples/formula_verify.cpp -o my_formula.rtw
+rtorch my_formula.rtw --input examples/input_1000.bin --device cpu
+```
+
+`--dump <file.rtw>` 打印容器结构。
+
+### 输入/输出 blob
+
+`--input` 文件是原始字节,作为 `rtorch_blob`(`{ data, len }`)传给公式。CLI 路径
+不做编码包装——公式自己决定布局(例如 float32 数据)。`--output` 写公式产出的精确
+字节 blob;默认是 stdout。
+
+### 其它参数
+
+```sh
+rtorch --version
+rtorch --help
+```
+
+错误用稳定退出码:**2** = 用法错误,**1** = 运行时/IO 错误。诊断信息走 stderr,stdout
+只承载公式输出。
 
 可用 `rtorch --help` 与 `rtorch --version`。错误以稳定的退出码报告(2 = 用法错误,1 = 运行时错误)。
 

@@ -31,28 +31,98 @@ Environment overrides: `RTORCH_BUILD_ENGINE` (0 = CPU-only), `RTORCH_GXX`, `VULK
 
 ## Usage (CLI)
 
-Run a formula on the CPU:
+`rtorch` runs a formula: a `.cpp` file is compiled on the fly, a `.dll` is loaded
+directly. The formula implements `rtorch_output_size` + `rtorch_compute` (see
+`rtorch.h`), so the framework compiles/loads it, feeds it input blobs, allocates
+the output, times the run, and surfaces the result.
+
+### Synopsis
+
+```
+rtorch <formula.cpp|.dll> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]
+```
+
+| argument | meaning |
+|---|---|
+| `<formula.cpp>` | a formula source; compiled on the fly (needs `g++`) |
+| `<formula.dll>` | a pre-built formula DLL (e.g. `delta.dll`); loaded directly, no compiler |
+| `with <refs...>` | extra source/object files to compile alongside (optional) |
+| `--input <file>` | a raw byte blob fed to the formula; repeatable |
+| `--output <file>` | write the result blob to a file; default stdout |
+| `--device cpu\|gpu` | `cpu` = host, `gpu` = best accelerator (Vulkan compute) |
+
+### Run a formula source on the CPU
 
 ```sh
 rtorch examples/formula_verify.cpp --input examples/input_1000.bin --device cpu
 ```
 
-Run a formula on the GPU (if the formula exports a GLSL kernel):
+### Run a formula on the GPU (if it exports a GLSL kernel)
 
 ```sh
 rtorch examples/formula_gpu.cpp --device gpu --input examples/input_1000.bin
 ```
 
-Reference a **pre-built formula DLL** directly (no on-the-fly compile, no g++)
-— useful for distributing an already-compiled formula (e.g. `delta.dll`):
+### Use a pre-built formula DLL (no compiler, no on-the-fly compile)
+
+Distribute an already-compiled formula like `delta.dll` and reference it directly:
 
 ```sh
-rtorch delta.dll --input examples/input_1000.bin --device cpu
+rtorch delta.dll --input trig_input.bin --device cpu
 ```
 
-The framework loads the DLL and calls `rtorch_output_size` / `rtorch_compute`
-(and, on GPU, `rtorch_gpu_kernel`). A `.cpp` argument is compiled on the fly; a
-`.dll` argument is loaded directly.
+`rtorch.exe` `LoadLibrary`s the DLL and calls `rtorch_output_size` /
+`rtorch_compute` (and `rtorch_gpu_kernel` on GPU). This is the fastest way to ship
+a formula to a machine without a compiler.
+
+### Trig formula example (`examples/formula_trig.cpp` / `delta.dll`)
+
+`formula_trig.cpp` reads a blob of float32 values `x[i]` and writes a triple
+`[sin(x), cos(x), tan(x)]` per element (3 floats out for each 1 float in).
+
+```sh
+# compile + run the source (needs g++)
+rtorch examples/formula_trig.cpp --input trig_input.bin --output trig_out.bin --device cpu
+
+# load a pre-built DLL (no g++)
+rtorch delta.dll --input trig_input.bin --output trig_out.bin --device cpu
+
+# GPU (Vulkan) via the DLL's embedded GLSL kernel
+rtorch delta.dll --input trig_input.bin --output trig_out.bin --device gpu
+```
+
+`trig_input.bin` is a raw little-endian float32 array, e.g. the angles
+`0, π/6, π/4, π/3, π/2`. Output is `3×n` float32 values. CPU and GPU agree
+bit-for-bit (verified).
+
+### Package a formula into a self-contained `.rtw` container
+
+`--pack` bundles a formula source into `RTW.md`'s runtime container; running the
+`.rtw` executes the embedded formula (no source file needed afterwards):
+
+```sh
+rtorch --pack examples/formula_verify.cpp -o my_formula.rtw
+rtorch my_formula.rtw --input examples/input_1000.bin --device cpu
+```
+
+`--dump <file.rtw>` prints the container's structure.
+
+### Input / output blobs
+
+`--input` files are raw bytes passed to the formula as a `rtorch_blob`
+(`{ data, len }`). There is no encoding wrapper for the CLI path — the formula
+decides the layout (e.g. float32 data). `--output` writes the exact byte blob the
+formula produced; default is stdout.
+
+### Other flags
+
+```sh
+rtorch --version
+rtorch --help
+```
+
+Errors use stable exit codes: **2** = usage error, **1** = runtime/I-O error.
+Diagnostics go to stderr so stdout carries only formula output.
 
 `rtorch --help` and `rtorch --version` are available. Errors are reported with stable exit codes (2 = usage, 1 = runtime).
 

@@ -34,13 +34,38 @@ you need a native ASan/UBSan pass; that is how the C++ engine is sanitized.
 ## What IS used
 
 - `cargo check` — compile-only.
-- `cargo clippy --bin rtorch` — lint; no correctness errors from the current
-  `main.rs` changes.
-- `cargo test --release` — the executable test suite (integration + unit),
-  including `references_prebuilt_formula_dll` for the DLL-reference path.
+- `cargo clippy --all-targets` — lint; the parity test's hardcoded `FRAC_PI_*`
+  approximation was caught and fixed (approximate-value lint). Zero errors after.
+- `cargo test --all` — executable test suite; exit 0 (rtw includes
+  `rejects_bad_magic`/`rejects_truncated`, formula-abi edge cases, autograd,
+  tensor parity, Striker integration).
 - Dynamic edge tests of the real `rtorch.exe`: missing DLL, non-formula DLL,
   empty input, missing input, CPU/GPU via a prebuilt formula DLL — all fail
   cleanly (no panic / no access violation).
+
+## Full-unsafe static review (substitute for Miri)
+
+Every `unsafe` block (78 across `src/{formula,main,vk}.rs`) was reviewed. The
+three FFI symbol loaders (`formula.rs::load_symbol`, `main.rs::resolve_fn`,
+`vk.rs::sym`) all enforce a **pointer-size contract** before `transmute_copy`
+(`size_of::<T>() == size_of::<*mut c_void>()`, else `None`) — no size-mismatched
+transmute, so no UB from a non-pointer-sized `T`. Note this is the same pattern
+as Miri would check; Miri itself is unavailable (above).
+
+## cargo-fuzz — NOT usable offline
+
+`crates.io` returns **403** on this host (network-restricted), so `cargo-fuzz`
+cannot be installed. No fuzzing.
+
+## Known documentation code mismatch (non-defect, technical debt)
+
+`src/error.rs` states the library "returns errors instead of `panic!/expect!` on
+bad input", but `src/autograd.rs` / `src/gpu_tensor.rs` use `panic!` for
+defensive shape/gather/grad-length checks (all with upstream validation, so not
+UB). Converting these to `Result` is an API-level change that would ripple into
+Striker; recorded here rather than done, per the no-big-refactor rule.
+
+---
 
 See the existing `tests/` suite and the sanitizer note in the README for what
 the project relies on for correctness.

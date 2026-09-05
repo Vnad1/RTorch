@@ -29,7 +29,8 @@ fn trig_formula_cpu_gpu_parity() {
     }
 
     // Input: a few angles as float32, e.g. 0, pi/6, pi/4, pi/3, pi/2.
-    let angles = [0.0f32, 0.5235988, 0.7853982, 1.0471976, 1.5707964];
+    use std::f32::consts::{FRAC_PI_3, FRAC_PI_4, FRAC_PI_6, FRAC_PI_2};
+    let angles = [0.0f32, FRAC_PI_6, FRAC_PI_4, FRAC_PI_3, FRAC_PI_2];
     let mut inb = Vec::with_capacity(angles.len() * 4);
     for v in &angles {
         inb.extend_from_slice(&v.to_le_bytes());

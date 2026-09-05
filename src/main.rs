@@ -16,6 +16,14 @@ use std::path::{Path, PathBuf};
 // the same rtw/vk/loc/error sources into this bin — one copy in rtorch::*.
 use rtorch::{error, loc, rtw, vk};
 
+// A single process-wide trust gate (whitelist-first, in-process remember, then a
+// temporary cmd.exe prompt). Shared by the `.rtw` load paths so a path is
+// prompted at most once per process run.
+fn trust_gate() -> &'static rtorch::trust::TrustGate {
+    static GATE: std::sync::OnceLock<rtorch::trust::TrustGate> = std::sync::OnceLock::new();
+    GATE.get_or_init(rtorch::trust::TrustGate::from_env)
+}
+
 // Windows FFI for the OpenCL device-enumeration diagnostic (the formula pipeline
 // FFI lives in rtorch::formula). Kept here because `report_devices` uses it.
 #[cfg(windows)]
@@ -233,9 +241,32 @@ fn run(opts: &Opts, device: i32) -> error::Result<()> {
     }
     let refs: Vec<&Path> = opts.refs.iter().map(|r| Path::new(r.as_str())).collect();
 
+    // Trust gate for a pre-built formula DLL (loadable code): whitelist first,
+    // else in-process remembered, else a temporary cmd.exe prompt. A `.cpp`
+    // formula is source compiled locally (trusted), so it is not prompted.
+    let formula_path = Path::new(&opts.formula);
+    if let Some(ext) = formula_path.extension().and_then(|e| e.to_str()) {
+        if ext.eq_ignore_ascii_case("dll") {
+            match trust_gate().check(formula_path, "formula DLL") {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(error::RtorchError::whitelist(format!(
+                        "{}: formula DLL not trusted",
+                        formula_path.display()
+                    )));
+                }
+                Err(e) => {
+                    return Err(error::RtorchError::whitelist(format!(
+                        "trust check failed: {e}"
+                    )));
+                }
+            }
+        }
+    }
+
     // Delegate the whole compile/load/dispatch pipeline to the library. This is
     // the single source of truth for running a formula; the CLI only does I/O.
-    let bytes = rtorch::formula::run(Path::new(&opts.formula), &refs, &input_bufs, device)?;
+    let bytes = rtorch::formula::run(formula_path, &refs, &input_bufs, device)?;
 
     if let Some(path) = &opts.output {
         std::fs::write(path, &bytes)?;
@@ -385,7 +416,20 @@ fn rtw_subcommand(args: &[String]) -> i32 {
                 eprintln!("usage: rtorch --dump <x.rtw>");
                 return 2;
             }
-            let bytes = match rtw::read_file(std::path::Path::new(&args[2])) {
+            // Trust gate (whitelist -> remembered -> prompt) before dumping a .rtw.
+            let dump_path = std::path::Path::new(&args[2]);
+            match trust_gate().check(dump_path, "RTW container") {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!("rtorch: {} refused (not trusted)", dump_path.display());
+                    return 1;
+                }
+                Err(e) => {
+                    eprintln!("rtorch: trust check failed: {e}");
+                    return 1;
+                }
+            }
+            let bytes = match rtw::read_file(dump_path) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("rtorch: {e}");
@@ -498,7 +542,21 @@ fn render_kind(k: u8) -> &'static str {
 // container. Extracts the embedded formula source to a temp .cpp and routes to
 // the standard compile/run pipeline.
 fn run_rtw_file(args: &[String]) -> i32 {
-    let bytes = match rtw::read_file(std::path::Path::new(&args[1])) {
+    // Trust gate: whitelist first, else in-process remembered, else prompt via a
+    // temporary cmd window. Rejects untrusted `.rtw` before it reaches decode.
+    let rtw_path = std::path::Path::new(&args[1]);
+    match trust_gate().check(rtw_path, "RTW container") {
+        Ok(true) => {}
+        Ok(false) => {
+            eprintln!("rtorch: {} refused (not trusted)", rtw_path.display());
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("rtorch: trust check failed: {e}");
+            return 1;
+        }
+    }
+    let bytes = match rtw::read_file(rtw_path) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("rtorch: {e}");

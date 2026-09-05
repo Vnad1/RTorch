@@ -14,6 +14,8 @@ pub mod loc;
 pub mod ops;
 pub mod rtw;
 pub mod tensor;
+pub mod trust;
 pub mod vk;
+pub mod whitelist;
 
 pub use tensor::{DType, Shape, Tensor};

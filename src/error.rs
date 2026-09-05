@@ -26,6 +26,9 @@ pub enum RtorchError {
     ModelError(String),
     /// A `.rtw` container encode/decode failure.
     RTWError(String),
+    /// A `.rtw` was rejected because its path is not on the whitelist, or the
+    /// whitelist config (JSON) could not be read/parsed.
+    WhitelistError(String),
     /// General CLI/runtime error (missing file, bad args, etc.).
     Io(String),
 }
@@ -42,6 +45,7 @@ impl fmt::Display for RtorchError {
             RtorchError::DTypeError(m) => ("dtype", m),
             RtorchError::ModelError(m) => ("model", m),
             RtorchError::RTWError(m) => ("rtw", m),
+            RtorchError::WhitelistError(m) => ("whitelist", m),
             RtorchError::Io(m) => ("io", m),
         };
         write!(f, "{tag}: {msg}")
@@ -100,6 +104,9 @@ impl RtorchError {
     pub fn rtw(m: impl Into<String>) -> Self {
         RtorchError::RTWError(m.into())
     }
+    pub fn whitelist(m: impl Into<String>) -> Self {
+        RtorchError::WhitelistError(m.into())
+    }
     pub fn io(m: impl Into<String>) -> Self {
         RtorchError::Io(m.into())
     }
@@ -117,6 +124,7 @@ impl RtorchError {
             | RtorchError::DTypeError(_)
             | RtorchError::ModelError(_)
             | RtorchError::RTWError(_)
+            | RtorchError::WhitelistError(_)
             | RtorchError::Io(_) => 1,
         }
     }

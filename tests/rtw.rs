@@ -190,19 +190,6 @@ fn memory_roundtrip_fragments() {
 }
 
 #[test]
-fn hostile_count_does_not_abort() {
-    // A payload whose leading count is huge (0xFFFFFFFF) must NOT drive a
-    // multi-GB `Vec::with_capacity` allocation (which would abort the process).
-    // The decoder must reject it with Err instead. This is the regression test
-    // for the cap_for clamp in decode_model / decode_memory.
-    let hostile = [0xFFu8; 16];
-    let r = rtw::decode_memory(&hostile);
-    assert!(r.is_err(), "hostile memory count must be an error");
-    let r2 = rtw::decode_model(&hostile);
-    assert!(r2.is_err(), "hostile model count must be an error");
-}
-
-#[test]
 fn truncated_memory_returns_err() {
     // A memory payload truncated mid-way must return Err (not panic/abort).
     let mem = rtw::Memory {

@@ -169,7 +169,17 @@ fn references_prebuilt_formula_dll() {
     }
     std::fs::write(&input, &bytes).unwrap();
 
+    // A whitelist allowing the prebuilt DLL (trust gate passes it silently).
+    let dll_canon = std::fs::canonicalize(&dll).unwrap_or_else(|_| dll.clone());
+    let dll_json = dll_canon.display().to_string().replace('\\', "\\\\");
+    let wl_json = dir.join(format!("wl_{}.json", std::process::id()));
+    std::fs::write(&wl_json, format!(r#"{{ "allowed": ["{}"] }}"#, dll_json)).unwrap();
+    let dll_whitelist = wl_json.to_string_lossy().to_string();
+
     let out = Command::new(rtorch())
+        // The prebuilt formula DLL must be trusted (whitelist) so this test (which
+        // deliberately loads a compiled .dll) is allowed through the trust gate.
+        .env("RTORCH_WHITELIST", &dll_whitelist)
         .arg(&dll)
         .arg("--input")
         .arg(&input)
@@ -179,6 +189,7 @@ fn references_prebuilt_formula_dll() {
         .unwrap();
     let _ = std::fs::remove_file(&input);
     let _ = std::fs::remove_file(&dll);
+    let _ = std::fs::remove_file(&wl_json);
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
@@ -188,3 +199,63 @@ fn references_prebuilt_formula_dll() {
     );
     assert!(s.contains("[verify] n=5"), "stdout={s} (DLL reference path)");
 }
+
+#[test]
+fn rtw_whitelist_default_deny_then_allow() {
+    // Build a valid kernel `.rtw` from an existing example formula.
+    let formula = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/formula_verify.cpp");
+    if !std::path::Path::new(formula).exists() {
+        return; // example not present; skip
+    }
+    let dir = std::env::temp_dir().join(format!("rtorch_wl_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rtw_out = dir.join("whitelist.rtw");
+    // Pack it with --pack into an .rtw kernel container.
+    let pack = Command::new(rtorch())
+        .arg("--pack")
+        .arg(formula)
+        .arg("-o")
+        .arg(&rtw_out)
+        .output()
+        .unwrap();
+    assert!(pack.status.success(), "pack failed: {}", String::from_utf8_lossy(&pack.stderr));
+    assert!(rtw_out.exists(), "no .rtw produced");
+
+    // (A) Non-whitelisted, non-interactive: rejected (fail-closed, no hang).
+    let deny = Command::new(rtorch())
+        .env("RTORCH_TRUST_PROMPT", "0")
+        .arg(&rtw_out)
+        .arg("--device")
+        .arg("cpu")
+        .output()
+        .unwrap();
+    let deny_err = String::from_utf8_lossy(&deny.stderr);
+    assert!(
+        deny_err.contains("not trusted") || deny_err.contains("trusted"),
+        "expected trust rejection, stderr={deny_err}"
+    );
+    assert_eq!(deny.status.code(), Some(1), "deny should exit 1, stderr={deny_err}");
+
+    // (B) Allow: with RTORCH_WHITELIST listing the exact canonical path, it loads.
+    let canon = std::fs::canonicalize(&rtw_out).unwrap();
+    // JSON escapes backslashes (`\` -> `\\`).
+    let escaped = canon.display().to_string().replace('\\', "\\\\");
+    let wl_path = dir.join("whitelist.json");
+    std::fs::write(&wl_path, format!(r#"{{ "allowed": ["{}"] }}"#, escaped)).unwrap();
+
+    let allow = Command::new(rtorch())
+        .env("RTORCH_WHITELIST", &wl_path)
+        .arg(&rtw_out)
+        .arg("--device")
+        .arg("cpu")
+        .output()
+        .unwrap();
+    let allow_err = String::from_utf8_lossy(&allow.stderr);
+    assert!(
+        allow.status.success(),
+        "allow should succeed, stderr={allow_err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+

@@ -1,6 +1,6 @@
 [package]
 name = "rtorch"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "RTorch — universal compute framework (Rust + C++), CUDA-free, OpenCL-driven. Benchmarks beyond PyTorch."
 

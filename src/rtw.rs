@@ -79,6 +79,28 @@ fn put_u64(w: &mut Vec<u8>, v: u64) {
     w.extend_from_slice(&v.to_le_bytes());
 }
 
+/// A conservative pre-allocation capacity bound for a list whose element count
+/// was read from untrusted payload bytes. `count` is the claimed element count;
+/// `min_bytes` is a hard lower bound (bytes) each element needs. The returned
+/// capacity never exceeds what `remaining` bytes could possibly hold, so a
+/// hostile or truncated count cannot drive a multi-GB `Vec::with_capacity`
+/// allocation (which would abort the process). The loops still validate each
+/// field via bounds checks, so an implausible count just means the entries fail
+/// to parse — never a huge allocation.
+///
+/// `min_bytes == 0` yields the raw `count` (no clamp). When clamping, `remaining`
+/// may be less than `min_bytes`, so the division is bounded (never panics).
+fn bound_capacity(count: usize, min_bytes: usize, remaining: usize) -> usize {
+    if min_bytes == 0 {
+        return count;
+    }
+    match count.checked_mul(min_bytes) {
+        Some(needed) if needed <= remaining => count,
+        _ => remaining / min_bytes,
+    }
+}
+
+
 fn rd_u16(r: &mut &[u8]) -> io::Result<u16> {
     if r.len() < 2 {
         return Err(io::Error::new(
@@ -193,7 +215,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
             "rtw: short shape",
         ));
     }
-    let mut shape = Vec::with_capacity(rank);
+    let mut shape = Vec::with_capacity(bound_capacity(rank, 4, r.len()));
     for _ in 0..rank {
         shape.push(rd_u32(&mut r)?); // [12..] shape[rank]
     }
@@ -375,7 +397,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     let name = rd_str(&mut r)?;
     let version = rd_u32(&mut r)?;
     let nparams = rd_u32(&mut r)? as usize;
-    let mut params = Vec::with_capacity(nparams);
+    let mut params = Vec::with_capacity(bound_capacity(nparams, 4, r.len()));
     for _ in 0..nparams {
         let pname = rd_str(&mut r)?;
         let rank = rd_u32(&mut r)? as usize;
@@ -385,7 +407,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
                 "rtw: short shape",
             ));
         }
-        let mut shape = Vec::with_capacity(rank);
+        let mut shape = Vec::with_capacity(bound_capacity(rank, 4, r.len()));
         for _ in 0..rank {
             shape.push(rd_u32(&mut r)?);
         }
@@ -415,9 +437,9 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     r = &r[1..];
     let opt = if has_opt != 0 {
         let t = rd_u64(&mut r)?;
-        let mut read_lists = |r: &mut &[u8]| -> io::Result<Vec<Vec<f32>>> {
+        let read_lists = |r: &mut &[u8]| -> io::Result<Vec<Vec<f32>>> {
             let n = rd_u32(r)? as usize;
-            let mut out = Vec::with_capacity(n);
+            let mut out = Vec::with_capacity(bound_capacity(n, 4, r.len()));
             for _ in 0..n {
                 out.push(rd_f32s(r)?);
             }
@@ -453,7 +475,7 @@ pub fn encode_memory(m: &Memory) -> Vec<u8> {
 pub fn decode_memory(bytes: &[u8]) -> io::Result<Memory> {
     let mut r: &[u8] = bytes;
     let n = rd_u32(&mut r)? as usize;
-    let mut frags = Vec::with_capacity(n);
+    let mut frags = Vec::with_capacity(bound_capacity(n, 8, r.len()));
     for _ in 0..n {
         let id = rd_u64(&mut r)?;
         let state = rd_f32s(&mut r)?;

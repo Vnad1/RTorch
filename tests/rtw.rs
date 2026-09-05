@@ -204,3 +204,15 @@ fn truncated_memory_returns_err() {
     let r = rtw::decode_memory(&bytes);
     assert!(r.is_err(), "truncated memory must be an error");
 }
+
+#[test]
+fn hostile_count_returns_err_not_abort() {
+    // A payload whose leading count is huge (0xFFFFFFFF) must return Err, not
+    // drive a multi-GB `Vec::with_capacity` allocation (which would abort the
+    // process). This is the regression test for `bound_capacity` in
+    // decode_memory / decode_model / decode.
+    let hostile = [0xFFu8; 16];
+    assert!(rtw::decode_memory(&hostile).is_err());
+    assert!(rtw::decode_model(&hostile).is_err());
+    assert!(rtw::decode(&hostile).is_err());
+}

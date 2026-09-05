@@ -24,6 +24,12 @@ fn trust_gate() -> &'static rtorch::trust::TrustGate {
     GATE.get_or_init(rtorch::trust::TrustGate::from_env)
 }
 
+/// Human-facing release version (date-based `YYYY.MM.DD.N`). Kept separate from
+/// Cargo's semver `CARGO_PKG_VERSION` (which is a legal-semver marker).
+fn rt_release_version() -> &'static str {
+    "2026.09.06.1"
+}
+
 // Windows FFI for the OpenCL device-enumeration diagnostic (the formula pipeline
 // FFI lives in rtorch::formula). Kept here because `report_devices` uses it.
 #[cfg(windows)]
@@ -45,7 +51,10 @@ struct Opts {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("rtorch {}", env!("CARGO_PKG_VERSION"));
+        // Human-facing release version is the date-based YYYY.MM.DD.N (see README
+        // "Versioning"). Cargo's CARGO_PKG_VERSION is a semver marker (2696.9.6)
+        // because Cargo rejects the 4-part/leading-zero date form.
+        println!("rtorch {}", rt_release_version());
         return;
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {

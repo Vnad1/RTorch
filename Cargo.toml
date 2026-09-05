@@ -1,6 +1,9 @@
 [package]
 name = "rtorch"
-version = "0.1.4"
+# Cargo requires a legal semver here (no leading zeros, no 4-part date). The
+# human-facing release version is the date-based `YYYY.MM.DD.N` (e.g. 2026.09.06.1)
+# shown in README / GitHub Releases. This marker maps to that release.
+version = "2696.9.6"
 edition = "2024"
 description = "RTorch — universal compute framework (Rust + C++), CUDA-free, OpenCL-driven. Benchmarks beyond PyTorch."
 

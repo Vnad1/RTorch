@@ -4,6 +4,16 @@
 
 It is **not** a model library and **not** a Transformer/Deep-Learning framework. RTorch is the *compute layer*: it provides tensors, autograd, optimizers, a formula/kernel system, a device runtime, and a self-contained artifact format. A model framework (such as **Striker**) is built *on top of* RTorch, not inside it.
 
+## Versioning
+
+RTorch uses a **date-based release version**: `YYYY.MM.DD.N`.
+
+- `2026.09.06.1` = the **1st** version released **on 2026-09-06**.
+- The trailing `.N` is the **ordinal of the day** — the 2nd release on the same day is `.2`, and so on.
+- On a new calendar day the ordinal **resets to `.1`** (it does not accumulate): e.g. `2026.09.07.1` is the first release on 09-07, independent of how many were published on 09-06.
+
+This records *when* an RTorch release was produced and which release of that day it is; it is independent of RTorch's format version and of any component's version.
+
 **Where the boundary is:**
 
 | layer | what it owns | examples |

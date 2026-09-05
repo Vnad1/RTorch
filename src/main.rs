@@ -506,6 +506,7 @@ fn rtw_subcommand(args: &[String]) -> i32 {
                 shape: vec![],
                 data: vec![],
                 kernel: Some(src),
+                manifest: None,
             };
             match rtw::write_file(std::path::Path::new(&o), &rtw::encode(&rtw)) {
                 Ok(_) => {

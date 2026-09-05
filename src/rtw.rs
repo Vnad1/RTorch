@@ -33,6 +33,209 @@ pub const KIND_MEMORY: u8 = 3; // Striker 记忆 state(Frag 列表序列化, 动
 
 const FLAG_HAS_KERNEL: u8 = 0x01;
 
+/// RTW format version (semver string). RTW is a format described by the RTW
+/// protocol; this is the format version, independent of any RTorch release.
+/// RTW is part of RTorch (no separate "RTW" product); the artifact's own
+/// version and its "library it came from" live in the Manifest.
+pub const RTW_FORMAT_VERSION: &str = "0.0.1";
+
+/// Magic that marks the optional Manifest block at the head of the `data`
+/// payload. A legacy RTW whose `data` does not start with this magic is treated
+/// as having no Manifest (format v1), so an old RTW remains readable.
+const MANIFEST_MAGIC: [u8; 4] = *b"RTMF";
+
+/// The self-describing Manifest carried at the head of an RTW's `data` payload.
+/// RTorch only reads this to answer three things — which library this artifact
+/// came from, where it is located, and whether the RTW can parse itself into a
+/// form the runtime understands. It does NOT resolve dependencies, download, or
+/// interpret third-party semantics (those belong to an upper runtime/package
+/// manager).
+#[derive(Debug, Clone)]
+pub struct Manifest {
+    /// Stable, globally-unique artifact id (reverse-DNS namespace):
+    /// e.g. "com.example.model". This is the "which library" answer.
+    pub artifact_id: String,
+    /// Where this artifact/file lives (path/URL), i.e. the "location" answer.
+    pub location: String,
+    /// Format version this artifact uses (defaults to RTW_FORMAT_VERSION).
+    pub format_version: String,
+    /// Capabilities this artifact requires/declares (optional, informational).
+    pub requires: Vec<String>,
+}
+
+impl Default for Manifest {
+    fn default() -> Self {
+        Manifest {
+            artifact_id: String::new(),
+            location: String::new(),
+            format_version: RTW_FORMAT_VERSION.to_string(),
+            requires: Vec::new(),
+        }
+    }
+}
+
+/// Encode a Manifest as the JSON string carried at the head of `data`.
+/// Hand-written (no serde/third-party deps). Produces a compact object:
+///   {"artifact_id":..,"location":..,"format_version":..,"requires":[..]}
+pub fn encode_manifest(m: &Manifest) -> Vec<u8> {
+    let mut s = String::from("{");
+    s.push_str("\"artifact_id\":");
+    s.push_str(&json_str(&m.artifact_id));
+    s.push_str(",\"location\":");
+    s.push_str(&json_str(&m.location));
+    s.push_str(",\"format_version\":");
+    s.push_str(&json_str(&m.format_version));
+    s.push_str(",\"requires\":[");
+    for (i, r) in m.requires.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&json_str(r));
+    }
+    s.push_str("]}");
+    s.into_bytes()
+}
+
+/// Parse a Manifest JSON string back into a [`Manifest`]. Loose: unknown keys are
+/// ignored (forward-compatible); only the fields RTorch understands are read.
+/// Returns `Err` on malformed JSON structure.
+pub fn parse_manifest(bytes: &[u8]) -> io::Result<Manifest> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "rtw: manifest not utf8"))?;
+    let mut m = Manifest::default();
+    parse_manifest_fields(text, &mut m)?;
+    Ok(m)
+}
+
+/// A tiny JSON string literal encoder (escaping `"`, `\`, and common controls).
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn is_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
+}
+
+fn read_json_string(bytes: &[u8], start: usize) -> io::Result<(String, usize)> {
+    // bytes[start] == '"'
+    let mut out = String::new();
+    let mut i = start + 1;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' {
+            return Ok((out, i + 1));
+        }
+        if c == '\\' {
+            if i + 1 < bytes.len() {
+                let esc = bytes[i + 1] as char;
+                let ch = match esc {
+                    '"' => '"',
+                    '\\' => '\\',
+                    '/' => '/',
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    'b' => '\u{8}',
+                    'f' => '\u{c}',
+                    other => other,
+                };
+                out.push(ch);
+                i += 2;
+                continue;
+            }
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "rtw: manifest bad escape"));
+        }
+        // Decode multi-byte UTF-8 char (non-ASCII ids/locations).
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(s) => {
+                let ch = s.chars().next().unwrap_or('\u{FFFD}');
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+            Err(_) => {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "rtw: manifest unterminated string"))
+}
+
+/// Scan a Manifest JSON object for the fields RTorch understands. Unknown keys
+/// are ignored (forward-compatible); this reads `artifact_id`, `location`,
+/// `format_version` (scalar strings) and `requires` (array of strings).
+fn parse_manifest_fields(text: &str, m: &mut Manifest) -> io::Result<()> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+
+    // Find each top-level `"key":` and decode its value.
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        let (key, next) = read_json_string(bytes, i)?;
+        i = next;
+        // Find ':' after the key, then skip it.
+        while i < bytes.len() && is_ws(bytes[i]) {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b':' {
+            break;
+        }
+        i += 1; // skip ':'
+        while i < bytes.len() && is_ws(bytes[i]) {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        // The value is either a string (scalar) or an array (requires).
+        if bytes[i] == b'"' && key != "requires" {
+            let (val, nx) = read_json_string(bytes, i)?;
+            match key.as_str() {
+                "artifact_id" => m.artifact_id = val,
+                "location" => m.location = val,
+                "format_version" => m.format_version = val,
+                _ => {}
+            }
+            i = nx;
+        } else if bytes[i] == b'[' && key == "requires" {
+            // Collect every string inside the requires array.
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] != b']' {
+                if bytes[j] == b'"' {
+                    let (v, nx) = read_json_string(bytes, j)?;
+                    m.requires.push(v);
+                    j = nx;
+                } else {
+                    j += 1;
+                }
+            }
+            i = j + 1;
+        } else {
+            // Skip to next comma / unknown structure.
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
+
 pub fn dtype_width(d: u8) -> usize {
     match d {
         DTYPE_FP32 | DTYPE_INT32 => 4,
@@ -61,11 +264,37 @@ pub struct Rtw {
     pub shape: Vec<u32>,
     pub data: Vec<u8>,
     pub kernel: Option<Vec<u8>>,
+    /// Optional self-describing Manifest carried at the head of `data`.
+    pub manifest: Option<Manifest>,
 }
 
 impl Rtw {
     pub fn count(&self) -> u64 {
         self.data.len() as u64 / dtype_width(self.dtype) as u64
+    }
+}
+
+impl Rtw {
+    /// The self-describing Manifest, if present. RTorch only reads this to answer
+    /// *which library* / *where* / *can RTW parse itself* — nothing more.
+    pub fn manifest(&self) -> Option<&Manifest> {
+        self.manifest.as_ref()
+    }
+
+    /// A short human description: the library this artifact came from (artifact_id),
+    /// its location, and whether it parsed (i.e. RTW could "translate itself").
+    pub fn describe(&self) -> String {
+        match &self.manifest {
+            Some(m) => format!(
+                "artifact_id={} location={} format_version={}",
+                if m.artifact_id.is_empty() { "<unknown>" } else { &m.artifact_id },
+                if m.location.is_empty() { "<unknown>" } else { &m.location },
+                if m.format_version.is_empty() { RTW_FORMAT_VERSION } else { &m.format_version }
+            ),
+            None => format!(
+                "artifact_id=<legacy-no-manifest> location=<unknown> format_version=1"
+            ),
+        }
     }
 }
 
@@ -193,9 +422,24 @@ pub fn encode(rtw: &Rtw) -> Vec<u8> {
     for &s in &rtw.shape {
         put_u32(&mut w, s); // shape[rank], offset 12..12+4*rank
     }
-    put_u64(&mut w, rtw.data.len() as u64); // data_len (bytes), offset ...
+    // data_len covers the whole data region: the optional manifest block (if
+    // any) plus the payload bytes.
+    let manifest_block_len: usize = match &rtw.manifest {
+        Some(m) => 8 + encode_manifest(m).len(), // magic(4) + len(4) + json
+        None => 0,
+    };
+    put_u64(&mut w, (rtw.data.len() + manifest_block_len) as u64); // data_len (bytes), offset ...
 
-    w.extend_from_slice(&rtw.data); // data payload
+    // The manifest (if any) is carried at the HEAD of the data payload, framed
+    // with the MANIFEST_MAGIC. A legacy RTW (no manifest) has data that does not
+    // start with MANIFEST_MAGIC, so it stays readable.
+    if let Some(m) = &rtw.manifest {
+        let json = encode_manifest(m);
+        w.extend_from_slice(&MANIFEST_MAGIC);
+        put_u32(&mut w, json.len() as u32);
+        w.extend_from_slice(&json);
+    }
+    w.extend_from_slice(&rtw.data); // data payload (after optional manifest block)
     let mut flags = 0u8;
     if rtw.kernel.is_some() {
         flags |= FLAG_HAS_KERNEL;
@@ -259,6 +503,10 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     }
     let data = r[..data_len].to_vec(); // data payload
     r = &r[data_len..];
+    // Extract the optional Manifest block at the head of `data` (if it carries
+    // the MANIFEST_MAGIC). A legacy RTW's data does not, so it stays compatible.
+    let (manifest, data) = split_manifest(data);
+
     if r.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -289,7 +537,24 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
         shape,
         data,
         kernel,
+        manifest,
     })
+}
+
+/// If `data` starts with `MANIFEST_MAGIC`, split off the framed Manifest and
+/// return `(Some(manifest), remaining_payload)`; otherwise `(None, data)`.
+fn split_manifest(data: Vec<u8>) -> (Option<Manifest>, Vec<u8>) {
+    if data.len() < 8 || &data[0..4] != &MANIFEST_MAGIC {
+        return (None, data);
+    }
+    let mlen = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+    if data.len() < 8 + mlen {
+        return (None, data); // truncated manifest marker; treat as no manifest
+    }
+    match parse_manifest(&data[8..8 + mlen]) {
+        Ok(m) => (Some(m), data[8 + mlen..].to_vec()),
+        Err(_) => (None, data), // malformed manifest; treat payload as-is
+    }
 }
 
 /// Read a whole file into bytes.
@@ -536,6 +801,7 @@ pub fn model_rtw(m: &Model) -> Rtw {
         shape: vec![m.params.len() as u32],
         data: encode_model(m),
         kernel: None,
+        manifest: None,
     }
 }
 
@@ -547,6 +813,7 @@ pub fn memory_rtw(m: &Memory) -> Rtw {
         shape: vec![m.fragments.len() as u32],
         data: encode_memory(m),
         kernel: None,
+        manifest: None,
     }
 }
 

@@ -14,6 +14,7 @@ fn result_fp32_roundtrip() {
         shape: vec![2, 3],
         data,
         kernel: None,
+        manifest: None,
     };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
@@ -34,6 +35,7 @@ fn kernel_roundtrip_keeps_source() {
         shape: vec![],
         data: vec![],
         kernel: Some(src.clone()),
+        manifest: None,
     };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
@@ -50,6 +52,7 @@ fn model_kind_roundtrip() {
         shape: vec![4],
         data,
         kernel: None,
+        manifest: None,
     };
     let bytes = rtw::encode(&rtw);
     let dec = rtw::decode(&bytes).expect("decode");
@@ -82,6 +85,7 @@ fn rejects_truncated() {
         shape: vec![2],
         data,
         kernel: None,
+        manifest: None,
     };
     let bytes = rtw::encode(&rtw);
     // Truncate deep into the payload region: data_len is already read, but the
@@ -215,4 +219,58 @@ fn hostile_count_returns_err_not_abort() {
     assert!(rtw::decode_memory(&hostile).is_err());
     assert!(rtw::decode_model(&hostile).is_err());
     assert!(rtw::decode(&hostile).is_err());
+}
+
+#[test]
+fn manifest_roundtrip_and_describe() {
+    // Build a result RTW carrying a Manifest (which library / where / format).
+    let data = f32_bytes(&[1.0, 2.0, 3.0, 4.0]);
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![2, 2],
+        data: data.clone(),
+        kernel: None,
+        manifest: Some(rtw::Manifest {
+            artifact_id: "com.example.model".to_string(),
+            location: "/models/my.rtw".to_string(),
+            format_version: rtw::RTW_FORMAT_VERSION.to_string(),
+            requires: vec!["compute.session".to_string()],
+        }),
+    };
+    let bytes = rtw::encode(&rtw);
+    let dec = rtw::decode(&bytes).expect("decode with manifest");
+    // The manifest is recovered at the head of data.
+    let m = dec.manifest.as_ref().expect("manifest recovered");
+    assert_eq!(m.artifact_id, "com.example.model");
+    assert_eq!(m.location, "/models/my.rtw");
+    assert_eq!(m.format_version, rtw::RTW_FORMAT_VERSION);
+    assert_eq!(m.requires, vec!["compute.session".to_string()]);
+    // The payload data is intact (just the manifest prefixed).
+    assert_eq!(dec.data, data);
+    // describe() reports which library + where (the "translated" answers).
+    let desc = dec.describe();
+    assert!(desc.contains("com.example.model"), "describe={desc}");
+    assert!(desc.contains("/models/my.rtw"), "describe={desc}");
+}
+
+#[test]
+fn legacy_rtw_without_manifest_still_decodes() {
+    // A legacy RTW whose data does NOT start with the manifest magic must decode
+    // with manifest=None and identical data (backward compatible).
+    let data = f32_bytes(&[5.0, 6.0]);
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![2],
+        data: data.clone(),
+        kernel: None,
+        manifest: None,
+    };
+    let bytes = rtw::encode(&rtw);
+    let dec = rtw::decode(&bytes).expect("decode legacy");
+    assert!(dec.manifest.is_none(), "no manifest expected");
+    assert_eq!(dec.data, data);
+    // describe() marks it as legacy / no manifest.
+    assert!(dec.describe().contains("legacy"), "describe={}", dec.describe());
 }

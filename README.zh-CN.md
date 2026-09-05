@@ -4,6 +4,15 @@
 
 它**不是**模型库,也**不是** Transformer/深度学习框架。RTorch 属于*计算层*:提供张量、自动微分、优化器、公式/内核系统、设备运行时,以及一种自包含的产品格式。一个模型框架(例如 **Striker**)是在 RTorch *之上*构建的,而不是在它内部。
 
+**边界在哪:**
+
+| 层 | 拥有什么 | 例子 |
+|---|---|---|
+| **Striker**(模型框架) | 智能语义——Block、State、Fragment、Relation、Consolidation、Lifecycle、Routing | 一个模型"该记什么/如何推理" |
+| **RTorch**(本项目,计算层) | Tensor、Autograd、Runtime、Formula/Kernel、RTW、CPU/GPU | 构建/运行一条公式、训练一步、序列化一件产物 |
+
+RTorch **不理解** Block/Fragment/Memory/Relation——它只理解 Tensor / Operator / Kernel / Artifact / Runtime。模型请在它之上构建,而不是在它内部。
+
 ## 它提供什么
 
 - **张量** — CPU 宿主张量(`rtorch::tensor`),带 `Shape` / `DType`(F32/F64/F16/BF16/I32)、`shape`/`numel`/`reshape`/`view`/`transpose`,以及广播。

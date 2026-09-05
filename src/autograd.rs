@@ -1,6 +1,7 @@
 // RTorch autograd — 最小自动微分张量(Var) + Adam 优化器。
 // Var = Rc<RefCell<VarData>>, 前向 op 记录计算图(parents), backward 拓扑反向填充 .grad。
-// 支持 matmul/add/scale/tanh/sigmoid/softmax_ce(手动标量损失)。供 Striker 框架训练用。
+// 支持 matmul/add/scale/tanh/sigmoid/mul/gather/stack_rows, 行 softmax(softmax_row)。
+// 交叉熵不是这里的 op: 标量损失由调用方(如 Striker 模型层)用 ce_loss 生成, 见 crate::train。
 // 与 tensor.rs(纯数据容器)并存; GPU 接 tensor 后续(vk kernel 挂到 op)。
 
 use std::cell::RefCell;

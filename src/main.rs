@@ -11,34 +11,19 @@
 use std::env;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
-
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
 
 // Reuse the library's modules (single source of truth) instead of recompiling
 // the same rtw/vk/loc/error sources into this bin — one copy in rtorch::*.
 use rtorch::{error, loc, rtw, vk};
 
+// Windows FFI for the OpenCL device-enumeration diagnostic (the formula pipeline
+// FFI lives in rtorch::formula). Kept here because `report_devices` uses it.
 #[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn LoadLibraryW(name: *const u16) -> *mut std::ffi::c_void;
     fn GetProcAddress(h: *mut std::ffi::c_void, name: *const u8) -> *mut std::ffi::c_void;
     fn FreeLibrary(h: *mut std::ffi::c_void) -> i32;
-}
-
-type RtorchMain = unsafe extern "C" fn(i32, *const *const u8) -> i32;
-type OutputSizeFn = unsafe extern "C" fn(i32, *const Blob, i32) -> u64;
-type ComputeFn = unsafe extern "C" fn(i32, *const Blob, *mut Blob, i32) -> i32;
-type GpuKernelFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
-type GpuGroupsFn = unsafe extern "C" fn(*mut i32, *mut i32, *mut i32);
-
-#[repr(C)]
-struct Blob {
-    data: *const std::ffi::c_void,
-    len: usize,
 }
 
 struct Opts {
@@ -239,141 +224,19 @@ fn parse_args(args: &[String]) -> Option<Opts> {
     })
 }
 
-fn find_compiler() -> Option<PathBuf> {
-    if let Ok(p) = env::var("RTORCH_GXX") {
-        let p = PathBuf::from(&p);
-        if p.exists() {
-            return Some(p);
-        }
-        eprintln!(
-            "rtorch: warning: RTORCH_GXX set but not found: {}",
-            p.display()
-        );
-    }
-    // Machine-agnostic: `where g++` (no hardcoded install paths in code).
-    for name in ["g++.exe", "gcc.exe"] {
-        if let Ok(out) = Command::new("where").arg(name).output() {
-            if out.status.success() {
-                if let Ok(s) = String::from_utf8(out.stdout) {
-                    if let Some(line) = s.lines().next() {
-                        return Some(PathBuf::from(line));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
 fn run(opts: &Opts, device: i32) -> error::Result<()> {
-    let formula_path = Path::new(&opts.formula);
-    if !formula_path.exists() {
-        return Err(error::RtorchError::io(format!(
-            "formula not found: {}",
-            opts.formula
-        )));
-    }
-
-    // If the formula is a pre-built DLL (e.g. delta.dll), load it directly and
-    // compute — no compiler and no on-the-fly compile are needed. The framework
-    // "references" an already-compiled formula DLL.
-    let is_dll = formula_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("dll"))
-        .unwrap_or(false);
-    if is_dll {
-        // Resolve to an absolute path before LoadLibraryW: Windows' default
-        // search does NOT include the current working directory (Win8+), so a
-        // bare relative filename like "delta.dll" can fail to load even though
-        // the file is next to the exe. Absolute path sidesteps that ambiguity.
-        let dll_path = std::fs::canonicalize(formula_path)
-            .unwrap_or_else(|_| formula_path.to_path_buf());
-        let mut input_bufs: Vec<Vec<u8>> = Vec::new();
-        for f in &opts.inputs {
-            input_bufs.push(std::fs::read(f)?);
-        }
-        let bytes = execute_formula(&dll_path, &input_bufs, device)?;
-        if let Some(path) = &opts.output {
-            std::fs::write(path, &bytes)?;
-            eprintln!("[rtorch] wrote {} bytes -> {}", bytes.len(), path.display());
-        } else {
-            std::io::stdout().write_all(&bytes)?;
-        }
-        return Ok(());
-    }
-
-    let compiler = find_compiler().ok_or_else(|| {
-        error::RtorchError::compile("no C++ compiler found (need MinGW g++; set RTORCH_GXX)")
-    })?;
-
-    // Ensure compiler runtime DLLs are on PATH before we LoadLibrary later.
-    if let Some(dir) = compiler.parent() {
-        let mut path = env::var("PATH").unwrap_or_default();
-        let dstr = dir.display().to_string();
-        if !path.split(';').any(|p| p.eq_ignore_ascii_case(&dstr)) {
-            let newpath = format!("{};{}", dstr, path);
-            unsafe {
-                let _ = env::set_var("PATH", newpath);
-            }
-        }
-    }
-
-    let out_dll = env::current_dir()
-        .ok()
-        .unwrap_or_else(|| env::temp_dir())
-        .join(format!("rtorch_rt_{}.dll", std::process::id()));
-    let _ = std::fs::remove_file(&out_dll);
-
-    let mut cmd = Command::new(&compiler);
-    cmd.arg("-shared")
-        .arg("-fPIC")
-        .arg("-O3")
-        .arg("-std=c++17")
-        .arg("-march=native")
-        .arg("-ffast-math")
-        .arg("-funroll-loops")
-        // Static-link the whole MinGW runtime (incl. libwinpthread) so the
-        // formula DLL has NO dependency on the compiler's bin dir at load time.
-        .arg("-static")
-        .arg("-static-libgcc")
-        .arg("-static-libstdc++")
-        .arg(formula_path);
-    // include formula dir + ref dirs so `#include "rtorch.h"` resolves.
-    if let Some(dir) = formula_path.parent() {
-        cmd.arg("-I").arg(dir);
-    }
-    for r in &opts.refs {
-        let rp = Path::new(r);
-        if rp.exists() {
-            cmd.arg(rp);
-            if let Some(dir) = rp.parent() {
-                cmd.arg("-I").arg(dir);
-            }
-        } else {
-            eprintln!("rtorch: warning: ref not found, skipping: {r}");
-        }
-    }
-    cmd.arg("-o").arg(&out_dll);
-
-    let st = cmd.status()?;
-    if !st.success() {
-        let _ = std::fs::remove_file(&out_dll);
-        return Err(error::RtorchError::compile(
-            "compilation of formula failed (see g++ output above)",
-        ));
-    }
-
-    // Read inputs.
+    // Read input blobs from disk (the CLI's job; the pipeline takes bytes).
     let mut input_bufs: Vec<Vec<u8>> = Vec::new();
     for f in &opts.inputs {
         let bytes = std::fs::read(f)?;
         input_bufs.push(bytes);
     }
+    let refs: Vec<&Path> = opts.refs.iter().map(|r| Path::new(r.as_str())).collect();
 
-    let bytes = execute_formula(&out_dll, &input_bufs, device)?;
+    // Delegate the whole compile/load/dispatch pipeline to the library. This is
+    // the single source of truth for running a formula; the CLI only does I/O.
+    let bytes = rtorch::formula::run(Path::new(&opts.formula), &refs, &input_bufs, device)?;
 
-    let _ = std::fs::remove_file(&out_dll);
     if let Some(path) = &opts.output {
         std::fs::write(path, &bytes)?;
         eprintln!("[rtorch] wrote {} bytes -> {}", bytes.len(), path.display());
@@ -388,256 +251,6 @@ use std::io::Write;
 
 // Tries the unified protocol (rtorch_output_size + rtorch_compute); falls back
 // to legacy rtorch_main if the formula does not export the protocol functions.
-fn execute_formula(dll: &Path, inputs: &[Vec<u8>], device: i32) -> error::Result<Vec<u8>> {
-    let handle = load_dll(dll)?;
-
-    let out_size = load_symbol::<OutputSizeFn>(handle, "rtorch_output_size");
-    let compute = load_symbol::<ComputeFn>(handle, "rtorch_compute");
-    let gpu_kernel = load_symbol::<GpuKernelFn>(handle, "rtorch_gpu_kernel");
-
-    // GPU path: if a formula provides a GLSL kernel and we're on the accelerator,
-    // compile it to SPIR-V and run it through the C++ Vulkan engine.
-    if device > 0 {
-        if let Some(gk) = gpu_kernel {
-            return execute_gpu(handle, inputs, device, gk, out_size);
-        }
-    }
-
-    if let (Some(out_size), Some(compute)) = (out_size, compute) {
-        let in_blobs: Vec<Blob> = inputs
-            .iter()
-            .map(|b| Blob {
-                data: b.as_ptr() as *const std::ffi::c_void,
-                len: b.len(),
-            })
-            .collect();
-        let n = in_blobs.len() as i32;
-        let want = unsafe { out_size(n, in_blobs.as_ptr(), device) } as usize;
-        let mut out_buf = vec![0u8; want];
-        let mut out_blob = Blob {
-            data: out_buf.as_ptr() as *const std::ffi::c_void,
-            len: out_buf.len(),
-        };
-
-        eprintln!("[rtorch] device={device} inputs={n} output={want} bytes");
-
-        let t0 = Instant::now();
-        let rc = unsafe { compute(n, in_blobs.as_ptr(), &mut out_blob, device) };
-        let elapsed = t0.elapsed();
-
-        eprintln!(
-            "[rtorch] compute rc={rc} elapsed={:.3} ms",
-            elapsed.as_secs_f64() * 1000.0
-        );
-        if rc != 0 {
-            unsafe { FreeLibrary(handle) };
-            return Err(error::RtorchError::load(format!(
-                "formula compute failed rc={rc}"
-            )));
-        }
-        // The formula may set out->len to the true number of bytes written.
-        let actual = out_blob.len.min(out_buf.len());
-        let _ = device;
-        unsafe { FreeLibrary(handle) };
-        Ok(out_buf[..actual].to_vec())
-    } else if let Some(main) = load_symbol::<RtorchMain>(handle, "rtorch_main") {
-        let mut argv_repr: Vec<Vec<u8>> = Vec::new();
-        argv_repr.push(CString::new("formula").unwrap().into_bytes_with_nul());
-        let mut ptrs: Vec<*const u8> = argv_repr.iter().map(|v| v.as_ptr()).collect();
-        ptrs.push(std::ptr::null());
-        unsafe { main(ptrs.len() as i32 - 1, ptrs.as_ptr()) };
-        unsafe { FreeLibrary(handle) };
-        Ok(Vec::new())
-    } else {
-        unsafe { FreeLibrary(handle) };
-        Err(error::RtorchError::load(
-            "formula must implement rtorch_output_size + rtorch_compute (see rtorch.h) or legacy rtorch_main",
-        ))
-    }
-}
-
-fn load_dll(dll: &Path) -> std::io::Result<*mut std::ffi::c_void> {
-    let wpath: Vec<u16> = dll
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let handle = unsafe { LoadLibraryW(wpath.as_ptr()) };
-    if handle.is_null() {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(handle)
-}
-
-// Find a glslang compiler (glslangValidator.exe preferred, else glslang.exe;
-// honest about the tool actually shipping in tools/bin and the Vulkan SDK).
-fn find_glslang() -> Option<PathBuf> {
-    if let Ok(p) = env::var("RTORCH_GLSLANG") {
-        let p = Path::new(&p);
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
-        eprintln!(
-            "rtorch: warning: RTORCH_GLSLANG set but not found: {}",
-            p.display()
-        );
-    }
-    let mut cands: Vec<PathBuf> = Vec::new();
-    if let Ok(sdk) = env::var("VULKAN_SDK") {
-        let d = Path::new(&sdk);
-        cands.push(d.join("Bin").join("glslangValidator.exe"));
-        cands.push(d.join("Bin").join("glslang.exe"));
-    }
-    // newest SDK under C:\VulkanSDK (independent of VULKAN_SDK)
-    if let Ok(rd) = std::fs::read_dir("C:\\VulkanSDK") {
-        let mut vers: Vec<PathBuf> = Vec::new();
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.file_name()
-                .map(|n| n.to_string_lossy().starts_with('1'))
-                .unwrap_or(false)
-            {
-                vers.push(p);
-            }
-        }
-        vers.sort();
-        for v in vers.into_iter().rev() {
-            cands.push(v.join("Bin").join("glslangValidator.exe"));
-            cands.push(v.join("Bin").join("glslang.exe"));
-        }
-    }
-    // repo tools/bin (glslang.exe is what actually ships there)
-    if let Ok(cwd) = env::current_dir() {
-        cands.push(cwd.join("tools").join("bin").join("glslang.exe"));
-        cands.push(cwd.join("tools").join("bin").join("glslangValidator.exe"));
-    }
-    // relative: tools/bin
-    if let Some(exe) = loc::exe_dir() {
-        cands.push(exe.join("..").join("tools").join("bin").join("glslang.exe"));
-    }
-    for c in cands {
-        if c.exists() {
-            return Some(c);
-        }
-    }
-    None
-}
-
-// Compile a GLSL compute shader to SPIR-V via glslang. Returns SPIR-V bytes.
-fn compile_glsl_to_spv(glsl: &str) -> std::io::Result<Vec<u8>> {
-    let glslang = find_glslang().ok_or_else(|| {
-        std::io::Error::other("glslangValidator not found (needed for GPU kernels)")
-    })?;
-    let dir = env::temp_dir();
-    let comp = dir.join(format!("rtorch_k_{}.comp", std::process::id()));
-    let spv = dir.join(format!("rtorch_k_{}.spv", std::process::id()));
-    std::fs::write(&comp, glsl.as_bytes())?;
-    let _ = std::fs::remove_file(&spv);
-    let st = Command::new(&glslang)
-        .arg("-V")
-        .arg(&comp)
-        .arg("-o")
-        .arg(&spv)
-        .status()?;
-    if !st.success() {
-        let _ = std::fs::remove_file(&comp);
-        return Err(std::io::Error::other(
-            "glslang compilation of GPU kernel failed (see glslang output)",
-        ));
-    }
-    let bytes = std::fs::read(&spv)?;
-    let _ = std::fs::remove_file(&comp);
-    let _ = std::fs::remove_file(&spv);
-    Ok(bytes)
-}
-
-// Execute a formula's GPU kernel: fetch GLSL, compile to SPIR-V, run through the
-// C++ Vulkan engine, and return the output blob.
-fn execute_gpu(
-    handle: *mut std::ffi::c_void,
-    inputs: &[Vec<u8>],
-    device: i32,
-    gk: GpuKernelFn,
-    out_size: Option<OutputSizeFn>,
-) -> error::Result<Vec<u8>> {
-    let glsl_ptr = unsafe { gk() };
-    if glsl_ptr.is_null() {
-        unsafe { FreeLibrary(handle) };
-        return Err(error::RtorchError::compile(
-            "formula returned null GLSL kernel",
-        ));
-    }
-    let glsl = unsafe { std::ffi::CStr::from_ptr(glsl_ptr) }
-        .to_string_lossy()
-        .into_owned();
-
-    // output length
-    let in_blobs: Vec<Blob> = inputs
-        .iter()
-        .map(|b| Blob {
-            data: b.as_ptr() as *const std::ffi::c_void,
-            len: b.len(),
-        })
-        .collect();
-    let n = in_blobs.len() as i32;
-    let want = match out_size {
-        Some(f) => (unsafe { f(n, in_blobs.as_ptr(), device) }) as usize,
-        None => 0,
-    };
-
-    // workgroup counts: formula override, else default gx=ceil(out_elems/256)
-    let mut gx: i32 = (((want / 4).max(1) + 255) / 256) as i32;
-    let mut gy: i32 = 1;
-    let mut gz: i32 = 1;
-    if let Some(gf) = load_symbol::<GpuGroupsFn>(handle, "rtorch_gpu_groups") {
-        unsafe { gf(&mut gx, &mut gy, &mut gz) };
-    }
-
-    let spv = compile_glsl_to_spv(&glsl)?;
-    eprintln!(
-        "[rtorch] gpu kernel compiled ({} bytes spv), groups=({gx},{gy},{gz}), out={want} B",
-        spv.len()
-    );
-    let groups = [gx.max(1) as u32, gy.max(1) as u32, gz.max(1) as u32];
-
-    // Persistent session: init Vulkan context once, then a warmup + repeated
-    // dispatches so only real GPU time is measured (framework sets up the device,
-    // pipeline and buffers a single time, like a real forward pass loop).
-    let input_sizes: Vec<usize> = inputs.iter().map(|b| b.len()).collect();
-    let mut session = vk::VkSession::init(&spv, &input_sizes, want)?;
-    let mut out = vec![0u8; want];
-
-    let reps = std::env::var("RTORCH_VK_REPS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(8);
-    // warmup (covers first-launch/JIT/pipeline cache)
-    session.dispatch(inputs, groups, &mut out)?;
-    let mut best = f64::INFINITY;
-    for _ in 0..reps {
-        if let Ok(ms) = session.dispatch(inputs, groups, &mut out) {
-            if ms < best {
-                best = ms;
-            }
-        }
-    }
-    eprintln!("[rtorch] gpu dispatch avg(best) elapsed={best:.3} ms over {reps} reps",);
-    unsafe { FreeLibrary(handle) };
-    Ok(out)
-}
-
-fn load_symbol<T: Copy>(handle: *mut std::ffi::c_void, name: &str) -> Option<T> {
-    let cname = CString::new(name).ok()?;
-    let p = unsafe { GetProcAddress(handle, cname.as_ptr() as *const u8) };
-    if p.is_null() {
-        None
-    } else if std::mem::size_of::<T>() != std::mem::size_of::<*mut std::ffi::c_void>() {
-        None
-    } else {
-        Some(unsafe { std::mem::transmute_copy::<*mut std::ffi::c_void, T>(&p) })
-    }
-}
-
 // ---- OpenCL device enumeration ----
 #[cfg(windows)]
 const CL_DEVICE_NAME: u32 = 0x102B;

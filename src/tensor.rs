@@ -74,7 +74,8 @@ pub struct Tensor {
     pub r: usize,
     pub c: usize,
     pub dtype: DType,
-    /// Full logical dims. r=c? r=dims[0], c=numel/dims[0]. For 2D = [r,c].
+    /// Full logical dims. `r` = the first dim, `c` = numel divided by `r`.
+    /// For a 2D tensor the dims are `[r, c]`.
     pub dims: Vec<usize>,
 }
 

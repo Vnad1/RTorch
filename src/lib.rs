@@ -6,6 +6,7 @@
 pub mod autograd;
 pub mod device;
 pub mod error;
+pub mod formula;
 pub mod gpu;
 pub mod gpu_tensor;
 pub mod gvar;

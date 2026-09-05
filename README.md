@@ -4,11 +4,21 @@
 
 It is **not** a model library and **not** a Transformer/Deep-Learning framework. RTorch is the *compute layer*: it provides tensors, autograd, optimizers, a formula/kernel system, a device runtime, and a self-contained artifact format. A model framework (such as **Striker**) is built *on top of* RTorch, not inside it.
 
+**Where the boundary is:**
+
+| layer | what it owns | examples |
+|---|---|---|
+| **Striker** (model framework) | intelligent semantics — Blocks, State, Fragments, Relations, Consolidation, Lifecycle, Routing | a model's "what to remember / how to reason" |
+| **RTorch** (this project, compute layer) | Tensor, Autograd, Runtime, Formula/Kernel, RTW, CPU/GPU | build/run a formula, train a step, serialize an artifact |
+
+RTorch does **not** understand Blocks/Fragments/Memory/Relations — it understands Tensor / Operator / Kernel / Artifact / Runtime. Build a model on top of it, not inside it.
+
 ## What it provides
 
 - **Tensor** — CPU host tensor (`rtorch::tensor`) with `Shape` / `DType` (F32/F64/F16/BF16/I32), `shape`/`numel`/`reshape`/`view`/`transpose`, and broadcasting.
 - **Autograd** — differentiable graphs on CPU (`rtorch::autograd`) and on device-resident GPU (`rtorch::gvar`), with `backward`, gradient accumulation over shared parameters, and an Adam optimizer (`rtorch::autograd::Adam`, `rtorch::gvar::AdamG`).
 - **Formula / Kernel system** — a C ABI (`rtorch.h`) so any `formula.cpp` implements `rtorch_output_size` + `rtorch_compute`; the framework compiles it and runs it on CPU or GPU. GPU paths can supply a GLSL compute kernel. See `rtorch.h`.
+  - **Forward-only by design (scheme D2(a))**: a formula / `model.dll` carries the **forward pass** only (inference, one compute step), and is **stateless** (no parameter blob, no backward). **Training is NOT run through the formula** — the model framework (Striker) owns forward + backward + optimizer using RTorch's autograd (`rtorch::autograd` / `rtorch::gvar`) and `Adam` / `AdamG`. See `forward_spec.md`.
 - **Device runtime** — `rtorch::device::Device` (Cpu/Gpu) and a unified op layer (`rtorch::ops`) so models do not need two implementations.
 - **Vulkan / GPU** — a C++ Vulkan compute engine (`rtorch_vk.dll`) with a persistent/device-resident model and a `KernelRegistry`; no CUDA dependency (cross-vendor Vulkan Compute).
 - **RTW (.rtw)** — a self-contained artifact format for results, kernels, models and memory (`rtw::`, `RTW.md`).

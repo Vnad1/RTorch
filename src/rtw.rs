@@ -1,19 +1,21 @@
 // RTorch Workfile (.rtw) — a self-contained container for results and compute
 // kernels. Not tied to PyTorch/any runtime: pure little-endian binary that any
-// language can read/write. Two kinds (v1):
-//   result : packed data tensor(s) -> shape/dtype/data
-//   kernel : embedded compute kernel (GLSL source) -> runnable by `rtorch x.rtw`
+// language can read/write. Kinds:
+//   result (0) : packed data tensor(s) -> shape/dtype/data
+//   kernel (1) : embedded compute kernel (GLSL source) -> runnable by `rtorch x.rtw`
+//   model  (2) : frozen weights (named params + optional Adam state) -> Model payload
+//   memory (3) : Striker memory state (fragment list) -> Memory payload
 // Format:
 //   magic  "RTW1" (4B)
 //   u16 version
-//   u8  kind    (0=result, 1=kernel)
+//   u8  kind    (0=result, 1=kernel, 2=model, 3=memory)
 //   u8  dtype   (0=fp32,1=fp16,2=fp8,3=fp4,4=int32,5=bytes)
 //   u32 rank
 //   u32 shape[rank]
-//   u64 count
-//   bytes data[count*width]         (kind=result)
+//   u64 data_len  (byte length of the data payload, little-endian)
+//   bytes data[data_len]              (all kinds; content depends on `kind`)
 //   u8  flags   (0x01 = has_kernel)
-//   u64 klen  + bytes kernel        (if flags & 0x01)
+//   u64 klen  + bytes kernel          (if flags & 0x01)
 //   magic  "RTEND" (5B)
 use std::io::{self, Read, Write};
 
@@ -112,32 +114,53 @@ fn rd_u64(r: &mut &[u8]) -> io::Result<u64> {
 }
 
 /// Serialize an Rtw container to bytes.
+///
+/// Byte layout (little-endian), offsets relative to the container start:
+///
+/// ```text
+/// [0..4]   magic    "RTW1"
+/// [4..6]   u16      version (=1)
+/// [6]      u8       kind
+/// [7]      u8       dtype
+/// [8..12]  u32      rank
+/// [12..]   u32[rank] shape (rank * 4 bytes)
+/// [..]     u64      data_len (byte length of data payload)
+/// [..]     byte[]   data payload
+/// [..]     u8       flags (0x01 = has_kernel)
+/// [..]     u64      kernel_len + byte[] kernel   (only if flags & 0x01)
+/// [..]     char[5]  "RTEND"
+/// ```
 pub fn encode(rtw: &Rtw) -> Vec<u8> {
     let mut w = Vec::new();
-    w.extend_from_slice(b"RTW1");
-    put_u16(&mut w, 1); // version
-    w.push(rtw.kind);
-    w.push(rtw.dtype);
-    put_u32(&mut w, rtw.shape.len() as u32);
+    w.extend_from_slice(b"RTW1"); // magic, offset 0..4
+    put_u16(&mut w, 1); // version, offset 4..6
+    w.push(rtw.kind); // kind, offset 6
+    w.push(rtw.dtype); // dtype, offset 7
+    put_u32(&mut w, rtw.shape.len() as u32); // rank, offset 8..12
     for &s in &rtw.shape {
-        put_u32(&mut w, s);
+        put_u32(&mut w, s); // shape[rank], offset 12..12+4*rank
     }
-    put_u64(&mut w, rtw.data.len() as u64);
-    w.extend_from_slice(&rtw.data);
+    put_u64(&mut w, rtw.data.len() as u64); // data_len (bytes), offset ...
+
+    w.extend_from_slice(&rtw.data); // data payload
     let mut flags = 0u8;
     if rtw.kernel.is_some() {
         flags |= FLAG_HAS_KERNEL;
     }
-    w.push(flags);
+    w.push(flags); // flags, offset ...
     if let Some(k) = &rtw.kernel {
-        put_u64(&mut w, k.len() as u64);
-        w.extend_from_slice(k);
+        put_u64(&mut w, k.len() as u64); // kernel_len
+        w.extend_from_slice(k); // kernel bytes
     }
-    w.extend_from_slice(b"RTEND");
+    w.extend_from_slice(b"RTEND"); // end magic, offset ...
     w
 }
 
 /// Parse an Rtw container from bytes, validating magic and trimming trailing.
+///
+/// Mirrors `encode`'s layout (see the layout block there). Read order:
+/// magic, version, kind, dtype, rank, shape, data_len, data, flags,
+/// kernel (only when the has-kernel flag is set), RTEND.
 pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     if bytes.len() < 12 || &bytes[0..4] != b"RTW1" {
         return Err(io::Error::new(
@@ -146,7 +169,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
         ));
     }
     let mut r: &[u8] = &bytes[4..];
-    let version = rd_u16(&mut r)?;
+    let version = rd_u16(&mut r)?; // [4..6] version
     if version != 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -159,11 +182,11 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
             "rtw: missing kind/dtype",
         ));
     }
-    let kind = r[0];
+    let kind = r[0]; // [6] kind
     r = &r[1..];
-    let dtype = r[0];
+    let dtype = r[0]; // [7] dtype
     r = &r[1..];
-    let rank = rd_u32(&mut r)? as usize;
+    let rank = rd_u32(&mut r)? as usize; // [8..12] rank
     if r.len() < rank * 4 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -172,16 +195,16 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
     }
     let mut shape = Vec::with_capacity(rank);
     for _ in 0..rank {
-        shape.push(rd_u32(&mut r)?);
+        shape.push(rd_u32(&mut r)?); // [12..] shape[rank]
     }
-    let data_len = rd_u64(&mut r)? as usize;
+    let data_len = rd_u64(&mut r)? as usize; // data_len (bytes)
     if r.len() < data_len {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "rtw: short data",
         ));
     }
-    let data = r[..data_len].to_vec();
+    let data = r[..data_len].to_vec(); // data payload
     r = &r[data_len..];
     if r.is_empty() {
         return Err(io::Error::new(
@@ -189,18 +212,18 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
             "rtw: missing flags",
         ));
     }
-    let flags = r[0];
+    let flags = r[0]; // flags
     r = &r[1..];
     let mut kernel = None;
     if flags & FLAG_HAS_KERNEL != 0 {
-        let klen = rd_u64(&mut r)? as usize;
+        let klen = rd_u64(&mut r)? as usize; // kernel_len
         if r.len() < klen {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "rtw: short kernel",
             ));
         }
-        kernel = Some(r[..klen].to_vec());
+        kernel = Some(r[..klen].to_vec()); // kernel bytes
         r = &r[klen..];
     }
     // end magic (optional tolerance)

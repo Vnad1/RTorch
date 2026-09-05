@@ -15,21 +15,28 @@ RTorch 的自包含计算容器，替代"裸字节 blob / 仅 `.cpp` 源"，让*
 偏移    字段         类型        说明
 0       magic       char[4]     "RTW1"
 4       version     u16         =1
-6       kind        u8          0=result  1=kernel
+6       kind        u8          0=result  1=kernel  2=model  3=memory
 7       dtype       u8          0=fp32 1=fp16 2=fp8 3=fp4 4=int32 5=bytes
 8       rank        u32         shape 维度数
 12      shape[]     u32[rank]   各维大小
-12+4*rank count     u64         = data 字节数 / dtype 字节宽
+12+4*rank data_len  u64         = data 净荷的字节数（linearly 小端）
 ...     data        byte[...]   连续数据净荷（小端原生值）
 ...     flags       u8          0x01 = has_kernel
 ...     kernel      u64 len + bytes   内嵌公式源码(kind=kernel)，可选
 ...     end_magic   char[5]     "RTEND"（完整性检测）
 ```
 
+> **字段语义说明**：二进制里 `data_len` 字段记录的是 **data 的字节数**（`encode` 写
+> `rtw.data.len()`）。"元素个数"可在解码端用 `data_len / dtype_width` 推导
+> （见 `Rtw::count()`）；字节偏移以 `dtype_width` 对齐，所以该除法在合法容器上
+> 总是整除。历史文档曾把该字段称作 `count` 并解释为元素数——**那是错的**；它
+> 存的就是字节数。本规范按实际写入对齐。
+
 - `dtype_width`：fp32/int32=4，fp16=2，fp8/fp4=1。
-- `kind=kernel`：`data` 为空，`kernel` 字段放**完整公式 `.cpp` 源码**（含 `rtorch_output_size`/`rtorch_compute`/可选 `rtorch_gpu_kernel`），运行时 `rtorch` 提取、写临时 `.cpp`、走既有编译→调度管线。
 - `kind=result`：`data` 存计算结果，`shape`/`dtype` 描述；`kernel` 缺省。
-- `kind=model`（规划，v1 未修）：内嵌推理内核 + 权重块 + 可选结构。
+- `kind=kernel`：`data` 为空，`kernel` 字段放**完整公式 `.cpp` 源码**（含 `rtorch_output_size`/`rtorch_compute`/可选 `rtorch_gpu_kernel`），运行时 `rtorch` 提取、写临时 `.cpp`、走既有编译→调度管线。
+- `kind=model`：`data` 是 `encode_model` 的自描述净荷（名字+版本+命名参数张量+可选 Adam 状态），用 `model_rtw`/`decode_model`。见 `src/rtw.rs` 的 `Model`/`NamedTensor`/`OptState`。
+- `kind=memory`：`data` 是 `encode_memory` 的净荷（一组记忆碎片 id+state+strength），用 `memory_rtw`/`decode_memory`。见 `src/rtw.rs` 的 `Memory`/`MemoryFragment`。
 
 ## CLI
 

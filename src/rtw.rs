@@ -79,25 +79,56 @@ fn put_u64(w: &mut Vec<u8>, v: u64) {
     w.extend_from_slice(&v.to_le_bytes());
 }
 
-/// A conservative pre-allocation capacity bound for a list whose element count
-/// was read from untrusted payload bytes. `count` is the claimed element count;
-/// `min_bytes` is a hard lower bound (bytes) each element needs. The returned
-/// capacity never exceeds what `remaining` bytes could possibly hold, so a
-/// hostile or truncated count cannot drive a multi-GB `Vec::with_capacity`
-/// allocation (which would abort the process). The loops still validate each
-/// field via bounds checks, so an implausible count just means the entries fail
-/// to parse — never a huge allocation.
+/// The theoretical maximum RTW artifact size allowed by the format/protocol
+/// (32 TiB). This is a **format-level** capability — it does NOT mean a device
+/// must be able to load 32 TiB, nor does it grant the decoder an unconditional
+/// right to allocate that much. The decoder enforces stricter runtime bounds
+/// (payload bytes + resource sanity) separately; this constant only caps what
+/// the format can represent.
+pub const RTW_MAX_SIZE: u64 = 32 * 1024 * 1024 * 1024 * 1024; // 32 TiB = 35,184,372,088,832
+
+/// Validate an element `count` read from untrusted payload bytes before using it
+/// as a pre-allocation capacity. The decoder never trusts a length field; it
+/// walks a validation chain:
 ///
-/// `min_bytes == 0` yields the raw `count` (no clamp). When clamping, `remaining`
-/// may be less than `min_bytes`, so the division is bounded (never panics).
-fn bound_capacity(count: usize, min_bytes: usize, remaining: usize) -> usize {
+///   1. `count * min_bytes` must not overflow `usize` (integer-overflow check).
+///   2. `count * min_bytes` must not exceed the format maximum `RTW_MAX_SIZE`
+///      (a payload declaring more than the format can represent is rejected).
+///   3. `count * min_bytes` must fit within the *actual* remaining payload bytes
+///      (a count that implies more data than the artifact holds is a malformed /
+///      hostile payload and is rejected — it is NOT clamped, so we can tell a
+///      deliberately-oversized count from a legitimately large artifact).
+///
+/// On success returns the capacity (= `count`). On any check failing, returns an
+/// error so the decoder rejects the payload instead of allocating.
+///
+/// `min_bytes == 0` disables the byte-size checks and returns `count` unchanged
+/// (for fields the caller trusts to be bounded separately).
+fn validate_capacity(count: usize, min_bytes: usize, remaining: usize) -> io::Result<usize> {
     if min_bytes == 0 {
-        return count;
+        return Ok(count);
     }
-    match count.checked_mul(min_bytes) {
-        Some(needed) if needed <= remaining => count,
-        _ => remaining / min_bytes,
+    // 1. Integer overflow: count * min_bytes must be representable.
+    let needed = count.checked_mul(min_bytes).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "rtw: count * element_size overflow")
+    })?;
+    // 2. Format-level cap: the artifact cannot claim more than RTW_MAX_SIZE bytes.
+    if needed as u64 > RTW_MAX_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "rtw: payload exceeds RTW_MAX_SIZE (32 TiB)",
+        ));
     }
+    // 3. Payload boundary: the claimed data must fit in the actual remaining
+    //    bytes. Oversized-but-not-overflowing counts are rejected here, which is
+    //    how a hostile count is distinguished from a valid large artifact.
+    if needed > remaining {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "rtw: count exceeds payload size",
+        ));
+    }
+    Ok(count)
 }
 
 
@@ -215,7 +246,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
             "rtw: short shape",
         ));
     }
-    let mut shape = Vec::with_capacity(bound_capacity(rank, 4, r.len()));
+    let mut shape = Vec::with_capacity(validate_capacity(rank, 4, r.len())?);
     for _ in 0..rank {
         shape.push(rd_u32(&mut r)?); // [12..] shape[rank]
     }
@@ -397,7 +428,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     let name = rd_str(&mut r)?;
     let version = rd_u32(&mut r)?;
     let nparams = rd_u32(&mut r)? as usize;
-    let mut params = Vec::with_capacity(bound_capacity(nparams, 4, r.len()));
+    let mut params = Vec::with_capacity(validate_capacity(nparams, 4, r.len())?);
     for _ in 0..nparams {
         let pname = rd_str(&mut r)?;
         let rank = rd_u32(&mut r)? as usize;
@@ -407,7 +438,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
                 "rtw: short shape",
             ));
         }
-        let mut shape = Vec::with_capacity(bound_capacity(rank, 4, r.len()));
+        let mut shape = Vec::with_capacity(validate_capacity(rank, 4, r.len())?);
         for _ in 0..rank {
             shape.push(rd_u32(&mut r)?);
         }
@@ -439,7 +470,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
         let t = rd_u64(&mut r)?;
         let read_lists = |r: &mut &[u8]| -> io::Result<Vec<Vec<f32>>> {
             let n = rd_u32(r)? as usize;
-            let mut out = Vec::with_capacity(bound_capacity(n, 4, r.len()));
+            let mut out = Vec::with_capacity(validate_capacity(n, 4, r.len())?);
             for _ in 0..n {
                 out.push(rd_f32s(r)?);
             }
@@ -475,7 +506,7 @@ pub fn encode_memory(m: &Memory) -> Vec<u8> {
 pub fn decode_memory(bytes: &[u8]) -> io::Result<Memory> {
     let mut r: &[u8] = bytes;
     let n = rd_u32(&mut r)? as usize;
-    let mut frags = Vec::with_capacity(bound_capacity(n, 8, r.len()));
+    let mut frags = Vec::with_capacity(validate_capacity(n, 8, r.len())?);
     for _ in 0..n {
         let id = rd_u64(&mut r)?;
         let state = rd_f32s(&mut r)?;
@@ -516,5 +547,48 @@ pub fn memory_rtw(m: &Memory) -> Rtw {
         shape: vec![m.fragments.len() as u32],
         data: encode_memory(m),
         kernel: None,
+    }
+}
+
+#[cfg(test)]
+mod rtw_decode_tests {
+    use super::*;
+
+    #[test]
+    fn validate_capacity_overflow_rejected() {
+        // count * min_bytes overflows usize -> Err (must not allocate).
+        let big = usize::MAX / 4; // * 8 overflows on 64-bit
+        let r = validate_capacity(big, 8, usize::MAX);
+        assert!(r.is_err(), "overflow must be rejected");
+
+        let r2 = validate_capacity(big, 0, usize::MAX); // min_bytes 0 -> no clamp
+        assert_eq!(r2.unwrap(), big);
+    }
+
+    #[test]
+    fn validate_capacity_rtw_max_size_rejected() {
+        // count * min_bytes exceeds RTW_MAX_SIZE (32 TiB) -> Err.
+        let count = (RTW_MAX_SIZE / 8) as usize + 1; // just over 32 TiB / 8
+        let r = validate_capacity(count, 8, usize::MAX);
+        assert!(r.is_err(), "over RTW_MAX_SIZE must be rejected");
+
+        // At exactly RTW_MAX_SIZE (with min_bytes 1) is allowed if it fits.
+        let r_ok = validate_capacity(RTW_MAX_SIZE as usize, 1, usize::MAX);
+        assert!(r_ok.is_ok());
+    }
+
+    #[test]
+    fn validate_capacity_payload_boundary_rejected() {
+        // count fits in format cap but exceeds actual payload bytes -> Err.
+        let r = validate_capacity(1000, 8, 16); // needs 8000 bytes, only 16 present
+        assert!(r.is_err(), "count exceeding payload must be rejected");
+    }
+
+    #[test]
+    fn validate_capacity_legit_large_allowed() {
+        // A count that actually fits within the remaining payload is allowed
+        // (a legitimately large artifact is not rejected just for being big).
+        let r = validate_capacity(100, 8, 1000); // 100*8 = 800 <= 1000
+        assert_eq!(r.unwrap(), 100);
     }
 }

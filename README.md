@@ -43,6 +43,17 @@ Run a formula on the GPU (if the formula exports a GLSL kernel):
 rtorch examples/formula_gpu.cpp --device gpu --input examples/input_1000.bin
 ```
 
+Reference a **pre-built formula DLL** directly (no on-the-fly compile, no g++)
+— useful for distributing an already-compiled formula (e.g. `delta.dll`):
+
+```sh
+rtorch delta.dll --input examples/input_1000.bin --device cpu
+```
+
+The framework loads the DLL and calls `rtorch_output_size` / `rtorch_compute`
+(and, on GPU, `rtorch_gpu_kernel`). A `.cpp` argument is compiled on the fly; a
+`.dll` argument is loaded directly.
+
 `rtorch --help` and `rtorch --version` are available. Errors are reported with stable exit codes (2 = usage, 1 = runtime).
 
 ## Usage (library)
@@ -67,6 +78,15 @@ cargo clippy --release --all-targets
 ```
 
 The test suite covers tensor correctness, autograd (including a central-difference numerical-gradient check), CPU/GPU numerical agreement, RTW round-trips, formula C-ABI edge cases, and GPU device-resident training convergence.
+
+> **Tooling limits (honest):** Miri does not run on this crate — it reports
+> `running 0 tests` on every target (nightly Gnu + `panic="abort"` + a `build.rs`
+> that shells out to g++/Vulkan), so it checks nothing and must not be treated as
+> a UB-clean result. AddressSanitizer via `-Zsanitizer=address` is also
+> unavailable on this Gnu nightly. Memory safety is instead established by
+> static review of each `unsafe` site (the FFI symbol loader enforces a size
+> check before `transmute_copy`) plus the runtime dynamic edge tests. See
+> `tests/TOOLING_NOTES.md`.
 
 ## Notes
 

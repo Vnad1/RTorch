@@ -43,6 +43,16 @@ rtorch examples/formula_verify.cpp --input examples/input_1000.bin --device cpu
 rtorch examples/formula_gpu.cpp --device gpu --input examples/input_1000.bin
 ```
 
+直接引用一个**预编译的公式 DLL**(无需现场编译、无需 g++)——用于分发已编译的
+公式(如 `delta.dll`):
+
+```sh
+rtorch delta.dll --input examples/input_1000.bin --device cpu
+```
+
+框架加载该 DLL 并调用 `rtorch_output_size` / `rtorch_compute`(GPU 下还有
+`rtorch_gpu_kernel`)。传 `.cpp` 会现场编译;传 `.dll` 则直接加载。
+
 可用 `rtorch --help` 与 `rtorch --version`。错误以稳定的退出码报告(2 = 用法错误,1 = 运行时错误)。
 
 ## 使用方法(库)
@@ -67,6 +77,13 @@ cargo clippy --release --all-targets
 ```
 
 测试套件覆盖:张量正确性、自动微分(含中心差分数值梯度校验)、CPU/GPU 数值一致性、RTW 往返、公式 C-ABI 边界用例,以及 GPU 设备驻留训练收敛。
+
+> **工具限制(诚实说明):** Miri 无法在本 crate 上运行——它对每个目标都报告
+> `running 0 tests`(nightly Gnu + `panic="abort"` + 会调用 g++/Vulkan 的
+> `build.rs`),等于什么都没检查,不能当作"无 UB"的依据。`-Zsanitizer=address`
+> 的 AddressSanitizer 在这个 Gnu nightly 上也不可用。内存安全改为依靠逐处
+> `unsafe` 的静态审查(FFI 符号加载器在 `transmute_copy` 前有尺寸校验)加上
+> 运行时动态边界测试。详见 `tests/TOOLING_NOTES.md`。
 
 ## 说明
 

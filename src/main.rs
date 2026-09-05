@@ -114,9 +114,10 @@ fn main() {
 fn usage() {
     eprintln!("RTorch — universal compute framework (CUDA-free)");
     eprintln!(
-        "usage: rtorch <formula.cpp> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]"
+        "usage: rtorch <formula.cpp|.dll> with <refs...> [--input <file>]... [--output <file>] [--device cpu|gpu]"
     );
-    eprintln!("  <formula.cpp> : implements rtorch_output_size + rtorch_compute (see rtorch.h)");
+    eprintln!("  <formula.cpp> : implements rtorch_output_size + rtorch_compute (see rtorch.h); compiled on the fly");
+    eprintln!("  <formula.dll> : a pre-built formula DLL (e.g. delta.dll) loaded directly, no compiler needed");
     eprintln!("  --input       : raw byte blobs fed to the formula (repeatable)");
     eprintln!("  --output      : write result blob to file; default stdout");
 }
@@ -265,6 +266,43 @@ fn find_compiler() -> Option<PathBuf> {
 }
 
 fn run(opts: &Opts, device: i32) -> error::Result<()> {
+    let formula_path = Path::new(&opts.formula);
+    if !formula_path.exists() {
+        return Err(error::RtorchError::io(format!(
+            "formula not found: {}",
+            opts.formula
+        )));
+    }
+
+    // If the formula is a pre-built DLL (e.g. delta.dll), load it directly and
+    // compute — no compiler and no on-the-fly compile are needed. The framework
+    // "references" an already-compiled formula DLL.
+    let is_dll = formula_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("dll"))
+        .unwrap_or(false);
+    if is_dll {
+        // Resolve to an absolute path before LoadLibraryW: Windows' default
+        // search does NOT include the current working directory (Win8+), so a
+        // bare relative filename like "delta.dll" can fail to load even though
+        // the file is next to the exe. Absolute path sidesteps that ambiguity.
+        let dll_path = std::fs::canonicalize(formula_path)
+            .unwrap_or_else(|_| formula_path.to_path_buf());
+        let mut input_bufs: Vec<Vec<u8>> = Vec::new();
+        for f in &opts.inputs {
+            input_bufs.push(std::fs::read(f)?);
+        }
+        let bytes = execute_formula(&dll_path, &input_bufs, device)?;
+        if let Some(path) = &opts.output {
+            std::fs::write(path, &bytes)?;
+            eprintln!("[rtorch] wrote {} bytes -> {}", bytes.len(), path.display());
+        } else {
+            std::io::stdout().write_all(&bytes)?;
+        }
+        return Ok(());
+    }
+
     let compiler = find_compiler().ok_or_else(|| {
         error::RtorchError::compile("no C++ compiler found (need MinGW g++; set RTORCH_GXX)")
     })?;
@@ -279,14 +317,6 @@ fn run(opts: &Opts, device: i32) -> error::Result<()> {
                 let _ = env::set_var("PATH", newpath);
             }
         }
-    }
-
-    let formula_path = Path::new(&opts.formula);
-    if !formula_path.exists() {
-        return Err(error::RtorchError::io(format!(
-            "formula not found: {}",
-            opts.formula
-        )));
     }
 
     let out_dll = env::current_dir()

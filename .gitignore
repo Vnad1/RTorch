@@ -30,3 +30,6 @@ Thumbs.db
 *.lib
 asanobj/
 enginetest*
+
+# Release packaging output (binary distribution folder) — not source
+release/

@@ -193,7 +193,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
             "rtw: short shape",
         ));
     }
-    let mut shape = Vec::with_capacity(rank);
+    let mut shape = Vec::with_capacity(cap_for(rank, 4, r.len()));
     for _ in 0..rank {
         shape.push(rd_u32(&mut r)?); // [12..] shape[rank]
     }
@@ -369,13 +369,43 @@ pub fn encode_model(m: &Model) -> Vec<u8> {
     w
 }
 
+/// A conservative pre-allocation capacity for a list whose length was read from
+/// untrusted payload bytes. `count` is the claimed element count; `min_entry` is
+/// a hard lower bound (bytes) each element needs. The returned capacity never
+/// exceeds what `remaining` bytes could possibly hold, so a hostile/truncated
+/// payload cannot drive a multi-GB `with_capacity` allocation (which would abort
+/// the process). The loop still validates each field via bounds checks, so an
+/// implausible count just means the entries fail to parse — never a huge alloc.
+///
+/// `min_entry` is a per-element lower bound in bytes; pass 0 to disable the clamp.
+///
+/// Safety: the divide only runs when `min_entry > 0` (a 0 min_entry makes
+/// `count*0 = 0` never exceed `remaining`, so `count` is returned instead), so
+/// there is no division by zero.
+fn cap_for(count: usize, min_entry: usize, remaining: usize) -> usize {
+    // Clamp a claimed element count against the bytes actually remaining. If
+    // min_entry is 0, count*0 = 0 never exceeds `remaining`, so `count` is kept
+    // (no clamp). Otherwise, if count*min_entry overflows or can't fit in
+    // `remaining`, clamp to what `remaining` bytes could hold — which keeps a
+    // hostile huge count from driving a giant `with_capacity`/`abort`. The divide
+    // only runs when min_entry > 0 (a 0 min_entry yields the `count` branch), so
+    // no division by zero.
+    if count.checked_mul(min_entry).is_none_or(|needed| needed > remaining) {
+        remaining / min_entry
+    } else {
+        count
+    }
+}
+
 /// Decode a Model payload produced by encode_model.
 pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
     let mut r: &[u8] = bytes;
     let name = rd_str(&mut r)?;
     let version = rd_u32(&mut r)?;
     let nparams = rd_u32(&mut r)? as usize;
-    let mut params = Vec::with_capacity(nparams);
+    // Clamp capacity to what the remaining bytes could plausibly hold (a hostile
+    // count must not drive a huge with_capacity). Each param needs >= ~4 bytes.
+    let mut params = Vec::with_capacity(cap_for(nparams, 4, r.len()));
     for _ in 0..nparams {
         let pname = rd_str(&mut r)?;
         let rank = rd_u32(&mut r)? as usize;
@@ -417,7 +447,7 @@ pub fn decode_model(bytes: &[u8]) -> io::Result<Model> {
         let t = rd_u64(&mut r)?;
         let mut read_lists = |r: &mut &[u8]| -> io::Result<Vec<Vec<f32>>> {
             let n = rd_u32(r)? as usize;
-            let mut out = Vec::with_capacity(n);
+            let mut out = Vec::with_capacity(cap_for(n, 4, r.len()));
             for _ in 0..n {
                 out.push(rd_f32s(r)?);
             }
@@ -453,7 +483,9 @@ pub fn encode_memory(m: &Memory) -> Vec<u8> {
 pub fn decode_memory(bytes: &[u8]) -> io::Result<Memory> {
     let mut r: &[u8] = bytes;
     let n = rd_u32(&mut r)? as usize;
-    let mut frags = Vec::with_capacity(n);
+    // Clamp capacity so a hostile fragment count can't drive a huge alloc; each
+    // fragment needs >= 8 bytes (id + state-len + strength).
+    let mut frags = Vec::with_capacity(cap_for(n, 8, r.len()));
     for _ in 0..n {
         let id = rd_u64(&mut r)?;
         let state = rd_f32s(&mut r)?;

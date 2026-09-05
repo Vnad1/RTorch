@@ -61,7 +61,7 @@ impl Whitelist {
             Some(t) => t,
             None => return false,
         };
-        self.allowed.iter().any(|a| paths_equal(a, &target))
+        self.allowed.iter().any(|a| paths_equal(&strip_verbatim(a.clone()), &target))
     }
 
     /// Number of allowed paths (useful for error messages / introspection).
@@ -78,15 +78,37 @@ impl Whitelist {
 /// (e.g. the file doesn't exist yet — still resolvable for a non-existent path by
 /// making it absolute relative to cwd).
 fn normalize(path: &Path) -> Option<PathBuf> {
-    if path.is_absolute() {
-        // Best-effort canonicalize (resolves symlinks, `..`); fall back to the
-        // path itself if the file doesn't exist yet.
-        Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        // Make relative paths absolute against cwd so exact-path matching works.
-        let abs = std::env::current_dir().ok()?.join(path);
-        Some(std::fs::canonicalize(&abs).unwrap_or(abs))
+        std::env::current_dir().ok()?.join(path)
+    };
+    // Canonicalize to resolve symlinks / `..`, but strip the Windows verbatim
+    // `\\?\` prefix that canonicalize returns — otherwise a whitelist entry written
+    // as a normal `D:\...` path never matches a `\\?\D:\...` target.
+    let canon = std::fs::canonicalize(&abs);
+    match canon {
+        Ok(c) => Some(strip_verbatim(c)),
+        Err(_) => Some(abs),
     }
+}
+
+/// Strip the Windows "\\?\" verbatim prefix (and any trailing separator) that
+/// `std::fs::canonicalize` may produce, so path comparison is consistent with the
+/// plain paths users write in the whitelist.
+#[cfg(windows)]
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    p
 }
 
 #[cfg(windows)]
@@ -294,5 +316,29 @@ mod tests {
         let json = "{\"allowed\":[\"C:\\\\模型\\\\文件.rtw\"]}";
         let paths = parse_whitelist_json(json).expect("parse");
         assert_eq!(paths, vec![PathBuf::from("C:\\模型\\文件.rtw")]);
+    }
+
+    #[test]
+    fn is_allowed_matches_existing_file_path() {
+        // Replicate the CLI formula-DLL case: the whitelist stores a real file's
+        // canonical path; querying it (absolute or relative) must match.
+        let repo = concat!(env!("CARGO_MANIFEST_DIR"));
+        let dll = std::path::Path::new(repo).join("delta.dll");
+        if !dll.exists() {
+            return; // formula dll not present in this checkout; skip
+        }
+        let canon = std::fs::canonicalize(&dll).unwrap();
+        // Store the canonical path (which may carry a `\\?\` verbatim prefix) and
+        // query it — is_allowed must match regardless of the prefix, so a whitelist
+        // written by hand (plain `D:\...`) and the target normalize consistently.
+        let json = format!(r#"{{ "allowed": ["{}"] }}"#, canon.display().to_string().replace('\\', "\\\\"));
+        let wl = Whitelist::load_from_text(&json).unwrap();
+        // Absolute query.
+        assert!(wl.is_allowed(&canon), "absolute path must be allowed");
+        // A plain (no verbatim prefix) absolute query must also match: the target
+        // normalizes consistently even if the whitelist entry carries `\\?\`.
+        let plain = canon.to_string_lossy().replace(r"\\?\", "");
+        let plain = std::path::PathBuf::from(plain);
+        assert!(wl.is_allowed(&plain), "plain absolute path must be allowed");
     }
 }

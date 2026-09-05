@@ -207,9 +207,22 @@ fn read_json_string(bytes: &[u8], start: usize) -> std::result::Result<(String, 
             }
             return Err("unterminated escape".to_string());
         }
-        // Preserve UTF-8 bytes (Windows paths usually ASCII; allow any).
-        out.push(c);
-        i += 1;
+        // Decode a (possibly multi-byte, non-ASCII) UTF-8 char instead of reading
+        // a single byte as a char — a literal byte cast would corrupt paths with
+        // non-ASCII characters.
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(s) => {
+                let ch = s.chars().next().unwrap_or('\u{FFFD}');
+                let adv = ch.len_utf8();
+                out.push(ch);
+                i += adv;
+            }
+            Err(_) => {
+                // Invalid UTF-8 byte: keep it verbatim to avoid panicking.
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
     }
     Err("unterminated string".to_string())
 }
@@ -279,5 +292,14 @@ mod tests {
         // A relative path resolving to `a` also matches (normalization).
         let rel = dir.join("a.rtw");
         assert!(wl.is_allowed(&rel));
+    }
+
+    #[test]
+    fn parses_non_ascii_path() {
+        // A path with non-ASCII characters (e.g. Chinese) must round-trip intact.
+        // JSON: { "allowed": ["C:\\模型\\文件.rtw"] } (Windows backslashes escaped).
+        let json = "{\"allowed\":[\"C:\\\\模型\\\\文件.rtw\"]}";
+        let paths = parse_whitelist_json(json).expect("parse");
+        assert_eq!(paths, vec![PathBuf::from("C:\\模型\\文件.rtw")]);
     }
 }

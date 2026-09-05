@@ -57,8 +57,16 @@ impl TrustGate {
         if self.is_remembered(path) {
             return Ok(true);
         }
-        // 3) Prompt (temporary cmd window).
-        match ask_trust_cmd(path, kind) {
+        // 3) Prompt (temporary cmd window). Print the library identity safely (to
+        // stderr, not a shell) so the user knows what they're authorizing; the cmd
+        // window only asks the fixed y/n question (no injection surface).
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        let from = path.display().to_string();
+        eprintln!("[rtorch] ask: trust this {kind}? From: {from}, Name: {name}");
+        match ask_trust_cmd() {
             Ok(true) => {
                 self.remember(path);
                 Ok(true)
@@ -84,37 +92,36 @@ impl TrustGate {
 }
 
 /// Spawn a temporary `cmd.exe` window that asks y/n and returns the answer.
-/// The window closes when the user answers; only `y`/`Y` is accepted as "yes".
 ///
-/// `kind` labels the library type; `from`/`name` identify it.
+/// SECURITY: the cmd script contains **only fixed text** — `from`, `name`, and
+/// `kind` are never interpolated into the command line, so a hostile path or file
+/// name cannot inject shell metacharacters (`&`, `|`, `^`, etc.). The identity of
+/// the library is printed by the caller (via `eprintln!`, which is not a shell) so
+/// the user still sees what they are being asked to trust.
+///
+/// The window closes when the user answers; only `y`/`Y` is accepted as "yes", and
+/// the result is surfaced through the process exit code (`exit /b 0` for yes,
+/// `exit /b 1` otherwise).
 ///
 /// Non-interactive safety: if `RTORCH_TRUST_PROMPT` is set to `0`, the interactive
 /// prompt is skipped and the answer is "no" (fail-closed). This is used for
 /// non-TTY / pipeline / automated contexts where a human cannot answer — the
 /// safe default is to reject rather than hang or silently allow.
-fn ask_trust_cmd(path: &Path, kind: &str) -> std::result::Result<bool, String> {
+fn ask_trust_cmd() -> std::result::Result<bool, String> {
     if std::env::var("RTORCH_TRUST_PROMPT").map(|v| v == "0").unwrap_or(false) {
         return Ok(false); // non-interactive: reject
     }
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.display().to_string());
-    let from = path.display().to_string();
-
-    // Build a cmd.exe one-liner: print the prompt, then `set /p` to read y/n,
-    // then exit the window. The process exits (window closes) once it's answered.
-    // We surface the answer through the process exit code for robustness: cmd
-    // `exit /b 0` for y, `exit /b 1` for n.
-    let script = format!(
-        "echo Do you trust this {kind}? From: {from}, Name: {name} (y/n)& set /p ANS=^>& echo ^%ANS^%|findstr /i \"^y\" >nul && (exit /b 0)& exit /b 1"
-    );
+    // `kind`, `from`, `name` are all printed to stderr by `check` (not a shell).
+    // Here the cmd script is **fully static** — no caller-supplied bytes touch it,
+    // so there is no command-injection surface.
+    let script =
+        "echo Do you trust this library? (y/n)& set /p ANS=^>& echo ^%ANS^%|findstr /i \"^y\" >nul && (exit /b 0)& exit /b 1";
 
     #[cfg(windows)]
     {
         let status = std::process::Command::new("cmd.exe")
             .arg("/c")
-            .arg(&script)
+            .arg(script)
             .status()
             .map_err(|e| format!("spawn trust prompt: {e}"))?;
         // exit 0 = yes (y/Y), anything else = no.
@@ -123,9 +130,7 @@ fn ask_trust_cmd(path: &Path, kind: &str) -> std::result::Result<bool, String> {
 
     #[cfg(not(windows))]
     {
-        let _ = (script, path, kind);
-        // Non-Windows: no interactive window; treat unknown as not-trusted but
-        // non-fatal. A real implementation would read stdin here.
+        let _ = script;
         Err("trust prompt only supported on Windows".to_string())
     }
 }

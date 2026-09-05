@@ -48,10 +48,11 @@ impl TrustGate {
     /// prompt. `name` is the file name and `from` the full path.
     pub fn check(&self, path: &Path, kind: &str) -> std::result::Result<bool, String> {
         // 1) Whitelist first.
-        if let Some(wl) = &self.whitelist {
-            if !wl.is_empty() && wl.is_allowed(path) {
-                return Ok(true);
-            }
+        if let Some(wl) = &self.whitelist
+            && !wl.is_empty()
+            && wl.is_allowed(path)
+        {
+            return Ok(true);
         }
         // 2) Remembered in this process.
         if self.is_remembered(path) {
@@ -125,7 +126,7 @@ fn ask_trust_cmd() -> std::result::Result<bool, String> {
             .status()
             .map_err(|e| format!("spawn trust prompt: {e}"))?;
         // exit 0 = yes (y/Y), anything else = no.
-        return Ok(status.code() == Some(0));
+        Ok(status.code() == Some(0))
     }
 
     #[cfg(not(windows))]

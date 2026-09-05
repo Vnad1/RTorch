@@ -42,7 +42,7 @@ pub const RTW_FORMAT_VERSION: &str = "0.0.1";
 /// Magic that marks the optional Manifest block at the head of the `data`
 /// payload. A legacy RTW whose `data` does not start with this magic is treated
 /// as having no Manifest (format v1), so an old RTW remains readable.
-const MANIFEST_MAGIC: [u8; 4] = *b"RTMF";
+pub const MANIFEST_MAGIC: [u8; 4] = *b"RTMF";
 
 /// The self-describing Manifest carried at the head of an RTW's `data` payload.
 /// RTorch only reads this to answer three things — which library this artifact
@@ -291,9 +291,7 @@ impl Rtw {
                 if m.location.is_empty() { "<unknown>" } else { &m.location },
                 if m.format_version.is_empty() { RTW_FORMAT_VERSION } else { &m.format_version }
             ),
-            None => format!(
-                "artifact_id=<legacy-no-manifest> location=<unknown> format_version=1"
-            ),
+            None => "artifact_id=<legacy-no-manifest> location=<unknown> format_version=1".to_string(),
         }
     }
 }
@@ -544,7 +542,7 @@ pub fn decode(bytes: &[u8]) -> io::Result<Rtw> {
 /// If `data` starts with `MANIFEST_MAGIC`, split off the framed Manifest and
 /// return `(Some(manifest), remaining_payload)`; otherwise `(None, data)`.
 fn split_manifest(data: Vec<u8>) -> (Option<Manifest>, Vec<u8>) {
-    if data.len() < 8 || &data[0..4] != &MANIFEST_MAGIC {
+    if data.len() < 8 || data[0..4] != MANIFEST_MAGIC[..] {
         return (None, data);
     }
     let mlen = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;

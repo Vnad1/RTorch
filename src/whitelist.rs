@@ -18,16 +18,10 @@
 use crate::error::{RtorchError, Result};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Whitelist {
     /// Canonical absolute paths that may be loaded.
     allowed: Vec<PathBuf>,
-}
-
-impl Default for Whitelist {
-    fn default() -> Self {
-        Whitelist { allowed: Vec::new() }
-    }
 }
 
 impl Whitelist {
@@ -51,8 +45,7 @@ impl Whitelist {
 
     /// Load a whitelist from an in-memory JSON string (also used by tests).
     pub fn load_from_text(text: &str) -> Result<Whitelist> {
-        let allowed = parse_whitelist_json(text)
-            .map_err(|e| RtorchError::whitelist(e))?;
+        let allowed = parse_whitelist_json(text).map_err(RtorchError::whitelist)?;
         Ok(Whitelist { allowed })
     }
 
@@ -92,7 +85,7 @@ fn normalize(path: &Path) -> Option<PathBuf> {
     } else {
         // Make relative paths absolute against cwd so exact-path matching works.
         let abs = std::env::current_dir().ok()?.join(path);
-        Some(std::fs::canonicalize(&abs).unwrap_or_else(|_| abs))
+        Some(std::fs::canonicalize(&abs).unwrap_or(abs))
     }
 }
 

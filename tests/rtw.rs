@@ -274,3 +274,51 @@ fn legacy_rtw_without_manifest_still_decodes() {
     // describe() marks it as legacy / no manifest.
     assert!(dec.describe().contains("legacy"), "describe={}", dec.describe());
 }
+
+#[test]
+fn malformed_manifest_prefix_does_not_panic() {
+    // Craft a data region that starts with the MANIFEST_MAGIC but is truncated /
+    // malformed. decode must NOT panic, OOB, or abort — it treats the payload as
+    // a plain (no-manifest) artifact and returns it intact.
+    let mut data = rtw::MANIFEST_MAGIC.to_vec();
+    // Claim a huge manifest length (0xFFFFFFFF) but supply no JSON.
+    data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    // A tiny trailing payload so kind/data parse.
+    data.extend_from_slice(&[1.0f32.to_le_bytes()].concat());
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![1],
+        data,
+        kernel: None,
+        manifest: None,
+    };
+    let bytes = rtw::encode(&rtw);
+    // This may or may not decode as a manifest, but it must NOT panic/abort.
+    let _ = rtw::decode(&bytes);
+}
+
+#[test]
+fn manifest_json_with_control_escape_roundtrips() {
+    // A manifest whose id/location contain characters the JSON encoder escapes
+    // (quotes / backslash / non-ASCII) must round-trip.
+    let rtw = rtw::Rtw {
+        kind: rtw::KIND_RESULT,
+        dtype: rtw::DTYPE_FP32,
+        shape: vec![1],
+        data: vec![0, 0, 0, 0],
+        kernel: None,
+        manifest: Some(rtw::Manifest {
+            artifact_id: "com.example.\"model\"\\x".to_string(),
+            location: "C:\\models\\文件.rtw".to_string(),
+            format_version: rtw::RTW_FORMAT_VERSION.to_string(),
+            requires: vec!["a".to_string(), "b".to_string()],
+        }),
+    };
+    let bytes = rtw::encode(&rtw);
+    let dec = rtw::decode(&bytes).expect("decode");
+    let m = dec.manifest.expect("manifest");
+    assert_eq!(m.artifact_id, "com.example.\"model\"\\x");
+    assert_eq!(m.location, "C:\\models\\文件.rtw");
+    assert_eq!(m.requires, vec!["a".to_string(), "b".to_string()]);
+}
